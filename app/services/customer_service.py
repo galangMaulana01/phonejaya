@@ -1,0 +1,33 @@
+from datetime import datetime, timezone
+from typing import Optional, List
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.schemas.customer import CustomerCreateRequest, CustomerResponse
+from app.utils.formatters import fmt_waktu
+from app.services.log_service import write_log
+
+
+def _fmt(doc: dict) -> CustomerResponse:
+    return CustomerResponse(
+        id=str(doc["_id"]), nama=doc["nama"],
+        kontak=doc["kontak"], cabang=doc["cabang"],
+        created_at=fmt_waktu(doc["created_at"]),
+    )
+
+
+async def list_customer(db, cabang: Optional[str]=None, q: Optional[str]=None) -> List[CustomerResponse]:
+    query: dict = {}
+    if cabang: query["cabang"] = cabang
+    if q: query["$or"] = [{"nama":{"$regex":q,"$options":"i"}},{"kontak":{"$regex":q,"$options":"i"}}]
+    docs = await db.customers.find(query).sort("nama", 1).to_list(length=None)
+    return [_fmt(d) for d in docs]
+
+
+async def create_customer(db, payload: CustomerCreateRequest, actor: str) -> CustomerResponse:
+    doc = {
+        "nama": payload.nama, "kontak": payload.kontak,
+        "cabang": payload.cabang, "created_at": datetime.now(timezone.utc),
+    }
+    result = await db.customers.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    await write_log(db, actor, "Tambah Customer", payload.nama, payload.cabang)
+    return _fmt(doc)
