@@ -1,7 +1,12 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-_KATEGORI_MAP = {"IP":"iPhone","AI":"Android","TB":"Tablet","AC":"Accessories","SP":"Sparepart"}
-_KONDISI_MAP  = {"BN":"Normal","MN":"Minus","EX":"Ex Inter","RJ":"Reject"}
+_KATEGORI_MAP = {
+    "IP": "iPhone", "AI": "Android", "TB": "Tablet",
+    "AC": "Accessories", "SP": "Sparepart"
+}
+_KONDISI_MAP = {
+    "BN": "Normal", "MN": "Minus", "EX": "Ex Inter", "RJ": "Reject"
+}
 
 
 async def _next_seq(db: AsyncIOMotorDatabase, key: str) -> int:

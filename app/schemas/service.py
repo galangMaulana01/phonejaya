@@ -4,51 +4,55 @@ from enum import Enum
 
 
 class StatusServiceEnum(str, Enum):
-    masuk    = "Masuk"
-    diagnosa = "Diagnosa"
-    proses   = "Proses"
-    selesai  = "Selesai"
-    diambil  = "Diambil"
+    antrian  = "Antrian"   # baru masuk dari kasir, belum diambil teknisi
+    proses   = "Proses"    # teknisi sedang kerjakan
+    selesai  = "Selesai"   # teknisi selesai, menunggu approval harga
+    approved = "Approved"  # kasir/owner sudah set harga → unit ke stok
+    ditolak  = "Ditolak"   # unit tidak bisa diperbaiki
 
 
 class ServiceCreateRequest(BaseModel):
-    nama_customer:    str
-    kontak_customer:  str
-    merk:             str
-    tipe:             str
+    """
+    Dibuat otomatis saat kasir input HP dengan kondisi_hp = Repair.
+    Tidak perlu diinput manual oleh teknisi.
+    """
+    unit_id:          str
+    nama_customer:    str = ""   # opsional untuk HP second dari penjual
+    kontak_customer:  str = ""
     keluhan:          str
     catatan_kerusakan: str = ""
-    estimasi_biaya:   int = 0
     cabang:           str = "JYP"
 
-    @field_validator("nama_customer", "merk", "tipe", "keluhan")
+    @field_validator("keluhan")
     @classmethod
     def not_empty(cls, v: str) -> str:
         if not v.strip():
-            raise ValueError("Tidak boleh kosong")
+            raise ValueError("Keluhan tidak boleh kosong")
         return v.strip()
 
 
 class ServiceUpdateRequest(BaseModel):
+    """
+    Hanya teknisi yang bisa update status & catatan.
+    Teknisi TIDAK bisa approve (set harga jual).
+    """
     status:            Optional[StatusServiceEnum] = None
     catatan_kerusakan: Optional[str] = None
-    estimasi_biaya:    Optional[int] = None
     teknisi:           Optional[str] = None
 
 
 class ServiceResponse(BaseModel):
-    id: str
-    service_id: str
-    nama_customer: str
-    kontak_customer: str
-    merk: str
-    tipe: str
-    keluhan: str
+    id:               str
+    service_id:       str
+    unit_id:          str
+    unit_label:       str
+    nama_customer:    str
+    kontak_customer:  str
+    keluhan:          str
     catatan_kerusakan: str
-    estimasi_biaya: int
-    status: str
-    teknisi: str
-    foto_urls: List[str]
-    cabang: str
-    created_at: str
-    updated_at: Optional[str] = None
+    status:           str
+    teknisi:          str
+    foto_urls:        List[str]
+    cabang:           str
+    created_at:       str
+    updated_at:       Optional[str] = None
