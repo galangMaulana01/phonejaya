@@ -27,6 +27,7 @@ class UnitCreateRequest(BaseModel):
     merk:          str
     tipe:          str
     storage:       str = "-"
+    ram:           str = "-"
     warna:         str = "-"
     imei:          str = "-"
     harga_modal:   int = 0
@@ -69,6 +70,7 @@ class UnitResponse(BaseModel):
     merk:        str
     tipe:        str
     storage:     str
+    ram:         str
     warna:       str
     imei:        str
     harga_modal: int
