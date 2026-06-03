@@ -17,3 +17,15 @@ async def dashboard_stats(
 ):
     stats = await dashboard_service.get_stats(db, cabang=cabang)
     return ok(stats)
+
+
+@router.get("/trend")
+async def dashboard_trend(
+    cabang: Optional[str] = Query(None),
+    hari:   int            = Query(30, ge=7, le=90),
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    _user:  dict = Depends(require_owner),
+):
+    """Trend penjualan & profit per hari. Default 30 hari terakhir."""
+    data = await dashboard_service.get_trend(db, cabang=cabang, hari=hari)
+    return ok(data)
