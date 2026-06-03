@@ -42,3 +42,55 @@ async def get_stats(db: AsyncIOMotorDatabase, cabang: str | None = None) -> dict
                      "total_transaksi": fin["total_trx"]},
         "recent_transaksi": recent,
     }
+
+
+async def get_trend(db: AsyncIOMotorDatabase, cabang: str | None = None, hari: int = 30) -> dict:
+    """Trend penjualan & profit per hari untuk N hari terakhir."""
+    from datetime import timedelta
+
+    trx_query = {"cabang": cabang} if cabang else {}
+    today = datetime.now(timezone.utc).date()
+    start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) - timedelta(days=hari - 1)
+
+    pipeline = [
+        {"$match": {**trx_query, "waktu": {"$gte": start}}},
+        {"$group": {
+            "_id": {
+                "y": {"$year":  "$waktu"},
+                "m": {"$month": "$waktu"},
+                "d": {"$dayOfMonth": "$waktu"},
+            },
+            "revenue": {"$sum": "$harga_jual"},
+            "profit":  {"$sum": "$profit"},
+            "jumlah":  {"$sum": 1},
+        }},
+        {"$sort": {"_id.y": 1, "_id.m": 1, "_id.d": 1}},
+    ]
+
+    docs = await db.transaksi.aggregate(pipeline).to_list(length=None)
+
+    # Buat lookup hari → data
+    lookup = {}
+    for d in docs:
+        key = f"{d['_id']['y']}-{str(d['_id']['m']).zfill(2)}-{str(d['_id']['d']).zfill(2)}"
+        lookup[key] = {"revenue": d["revenue"], "profit": d["profit"], "jumlah": d["jumlah"]}
+
+    # Isi semua hari (termasuk yang kosong = 0)
+    labels, revenues, profits, jumlah_list = [], [], [], []
+    for i in range(hari):
+        day = today - timedelta(days=hari - 1 - i)
+        key  = day.strftime("%Y-%m-%d")
+        label = day.strftime("%-d %b")   # misal: "3 Jun"
+        data = lookup.get(key, {"revenue": 0, "profit": 0, "jumlah": 0})
+        labels.append(label)
+        revenues.append(data["revenue"])
+        profits.append(data["profit"])
+        jumlah_list.append(data["jumlah"])
+
+    return {
+        "labels":   labels,
+        "revenue":  revenues,
+        "profit":   profits,
+        "jumlah":   jumlah_list,
+        "hari":     hari,
+    }
