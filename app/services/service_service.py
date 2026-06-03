@@ -11,20 +11,22 @@ from app.services.log_service import write_log
 
 
 def _fmt(doc: dict) -> ServiceResponse:
+    # Pakai .get() dengan fallback di semua field
+    # agar dokumen lama yang tidak punya field tertentu tidak crash KeyError
     return ServiceResponse(
         id=str(doc["_id"]),
-        service_id=doc["service_id"],
-        unit_id=doc["unit_id"],
+        service_id=doc.get("service_id", str(doc["_id"])),
+        unit_id=doc.get("unit_id", ""),
         unit_label=doc.get("unit_label", ""),
         nama_customer=doc.get("nama_customer", ""),
         kontak_customer=doc.get("kontak_customer", ""),
-        keluhan=doc["keluhan"],
+        keluhan=doc.get("keluhan", ""),
         catatan_kerusakan=doc.get("catatan_kerusakan", ""),
-        status=doc["status"],
+        status=doc.get("status", "Antrian"),
         teknisi=doc.get("teknisi", ""),
         foto_urls=doc.get("foto_urls", []),
-        cabang=doc["cabang"],
-        created_at=fmt_waktu(doc["created_at"]),
+        cabang=doc.get("cabang", ""),
+        created_at=fmt_waktu(doc["created_at"]) if doc.get("created_at") else "",
         updated_at=fmt_waktu(doc["updated_at"]) if doc.get("updated_at") else None,
     )
 
