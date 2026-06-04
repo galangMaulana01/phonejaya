@@ -7,6 +7,7 @@ from app.schemas.service import (
     ServiceUpdateRequest, ServiceResponse, StatusServiceEnum
 )
 from app.utils.formatters import fmt_waktu
+from app.services import sparepart_service
 from app.services.log_service import write_log
 
 
@@ -113,6 +114,14 @@ async def update_service(
                 {"unit_id": doc["unit_id"]},
                 {"$set": {"status": "Ditolak", "updated_at": datetime.now(timezone.utc)}}
             )
+
+        # Kalau Selesai → kurangi stok sparepart yang dipakai
+        if new_status == "Selesai":
+            sp_items = doc.get("sparepart_items", [])
+            if sp_items:
+                await sparepart_service.kurangi_stok_batch(
+                    db, items=sp_items, actor=actor, cabang=doc.get("cabang", "")
+                )
 
     if payload.catatan_kerusakan is not None:
         updates["catatan_kerusakan"] = payload.catatan_kerusakan

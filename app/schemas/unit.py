@@ -1,5 +1,10 @@
 from pydantic import BaseModel, field_validator
-from typing import Optional
+from typing import Optional, List
+
+
+class SparepartItem(BaseModel):
+    sp_id:  str
+    jumlah: int = 1
 from enum import Enum
 
 

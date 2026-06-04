@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config.settings import settings
-from app.routes import auth, units, transaksi, karyawan, log, dashboard, service, customer
+from app.routes import auth, units, transaksi, karyawan, log, dashboard, service, customer, sparepart
 
 logging.basicConfig(
     level=logging.INFO if settings.is_production else logging.DEBUG,
@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router, prefix=PREFIX)
     app.include_router(service.router,   prefix=PREFIX)
     app.include_router(customer.router,  prefix=PREFIX)
+    app.include_router(sparepart.router, prefix=PREFIX)
 
     @app.get("/health", tags=["Health"])
     async def health():
