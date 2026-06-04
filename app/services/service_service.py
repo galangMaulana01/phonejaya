@@ -7,7 +7,7 @@ from app.schemas.service import (
     ServiceUpdateRequest, ServiceResponse, StatusServiceEnum
 )
 from app.utils.formatters import fmt_waktu
-from app.services import sparepart_service
+from app.services.sparepart_service import kurangi_stok_batch as sp_kurangi_stok_batch
 from app.services.log_service import write_log
 
 
@@ -119,7 +119,7 @@ async def update_service(
         if new_status == "Selesai":
             sp_items = doc.get("sparepart_items", [])
             if sp_items:
-                await sparepart_service.kurangi_stok_batch(
+                await sp_kurangi_stok_batch(
                     db, items=sp_items, actor=actor, cabang=doc.get("cabang", "")
                 )
 
