@@ -7,7 +7,7 @@ from app.schemas.service import (
     ServiceUpdateRequest, ServiceResponse, StatusServiceEnum
 )
 from app.utils.formatters import fmt_waktu
-from app.services.sparepart_service import kurangi_stok_batch as sp_kurangi_stok_batch
+from app.services.sparepart import kurangi_stok_batch as sp_kurangi_stok_batch
 from app.services.log_service import write_log
 
 

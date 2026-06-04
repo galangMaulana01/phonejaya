@@ -4,7 +4,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.database import get_db
 from app.schemas.sparepart import SparepartCreateRequest, SparepartUpdateStokRequest
 from app.schemas.common import ok
-from app.services import sparepart_service
+from app.services import sparepart as sparepart_service
 from app.middlewares.auth import require_owner, require_kasir_or_owner
 
 router = APIRouter(prefix="/sparepart", tags=["Sparepart"])
