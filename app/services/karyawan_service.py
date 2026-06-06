@@ -58,7 +58,7 @@ async def create_karyawan(db, payload: KaryawanCreateRequest, actor: str) -> Kar
     await db.users.insert_one({
         "name":       payload.nama,
         "username":   payload.username,
-        "password":   hash_password(payload.password),
+        "password_hash":   hash_password(payload.password),
         "role":       role,
         "cabang":     payload.cabang,
         "aktif":      True,
