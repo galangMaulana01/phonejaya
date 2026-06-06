@@ -1,11 +1,12 @@
 from pydantic import BaseModel, field_validator
 from typing import Optional, List
+from enum import Enum
+from datetime import datetime
 
 
 class SparepartItem(BaseModel):
     sp_id:  str
     jumlah: int = 1
-from enum import Enum
 
 
 class StatusEnum(str, Enum):
@@ -16,35 +17,34 @@ class StatusEnum(str, Enum):
 
 
 class KondisiHP(str, Enum):
-    """Kondisi HP saat masuk dari penjual."""
-    mulus  = "Mulus"    # langsung ke stok jual
-    repair = "Repair"   # masuk antrian teknisi dulu
+    mulus  = "Mulus"
+    repair = "Repair"
 
 
 class UnitCreateRequest(BaseModel):
-    """
-    Input HP baru dari penjual (kasir / owner).
-    Setelah diposting → LOCKED, tidak bisa diedit siapapun.
-    """
     kat_kode:      str
-    kondisi_kode:  str           # BN / MN / EX / RJ (kode fisik)
-    kondisi_hp:    KondisiHP     # Mulus → stok | Repair → service
+    kondisi_kode:  str
+    kondisi_hp:    KondisiHP
     merk:          str
     tipe:          str
     storage:       str = "-"
     ram:           str = "-"
     warna:         str = "-"
-    imei:          str = "-"
-    harga_modal:   int = 0
+    imei:          str = "-"       # IMEI 1 (wajib diisi di frontend)
+    imei2:         str = "-"       # IMEI 2 opsional
+    tipe_sim:      str = "Single SIM"   # Single SIM / Dual SIM / eSIM / WiFi Only
+    keamanan:      str = "Tidak Ada"    # Face ID / Fingerprint / Touch ID / Tidak Ada
+    speaker:       str = "Normal"       # Normal / Tidak Normal
+    lcd:           str = "Original"     # Original / Tidak Original
     battery:       int = 100
+    battery_health: int = 0            # Battery Health % (opsional, 0 = tidak diisi)
+    harga_modal:   int = 0
+    harga_jual:    int = 0
+    garansi_toko:  int = 7             # hari
     catatan:       str = ""
     cabang:        str = "JYP"
-
-    # Kalau Mulus langsung set harga jual
-    harga_jual:    int = 0
-
-    # Kalau Repair → harga jual diisi oleh kasir/owner saat approval
-    keluhan:       str = ""      # wajib diisi kalau Repair
+    keluhan:       str = ""
+    sparepart_items: List[SparepartItem] = []
 
     @field_validator("merk", "tipe")
     @classmethod
@@ -55,10 +55,6 @@ class UnitCreateRequest(BaseModel):
 
 
 class ApproveRepairRequest(BaseModel):
-    """
-    Kasir / Owner menetapkan harga jual setelah teknisi selesai repair.
-    Unit akan pindah ke stok Tersedia.
-    """
     harga_jual: int
 
     @field_validator("harga_jual")
@@ -70,22 +66,32 @@ class ApproveRepairRequest(BaseModel):
 
 
 class UnitResponse(BaseModel):
-    id:          str
-    unit_id:     str
-    merk:        str
-    tipe:        str
-    storage:     str
-    ram:         str
-    warna:       str
-    imei:        str
-    harga_modal: int
-    harga_jual:  int
-    kondisi:     str
-    kondisi_hp:  str
-    battery:     int
-    status:      str
-    kategori:    str
-    catatan:     str
-    cabang:      str
-    locked:      bool   
-    service_id:  Optional[str] = None
+    id:            str
+    unit_id:       str
+    merk:          str
+    tipe:          str
+    storage:       str
+    ram:           str
+    warna:         str
+    imei:          str
+    imei2:         str = "-"
+    tipe_sim:      str = "Single SIM"
+    keamanan:      str = "Tidak Ada"
+    speaker:       str = "Normal"
+    lcd:           str = "Original"
+    harga_modal:   int
+    harga_jual:    int
+    kondisi:       str
+    kondisi_hp:    str
+    battery:       int
+    battery_health: int = 0
+    status:        str
+    kategori:      str
+    catatan:       str
+    cabang:        str
+    locked:        bool
+    garansi_toko:  int = 7
+    input_oleh:    str = ""
+    tgl_masuk:     str = ""
+    tgl_terjual:   Optional[str] = None
+    service_id:    Optional[str] = None

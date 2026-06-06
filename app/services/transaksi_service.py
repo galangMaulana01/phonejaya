@@ -49,7 +49,7 @@ async def create_transaksi(
 
     await db.units.update_one(
         {"unit_id": payload.unit_id},
-        {"$set": {"status": "Sold", "updated_at": datetime.now(timezone.utc)}}
+        {"$set": {"status": "Sold", "tgl_terjual": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}}
     )
 
     trx_id = await next_trx_id(db)
