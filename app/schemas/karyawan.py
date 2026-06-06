@@ -1,5 +1,6 @@
 from pydantic import BaseModel, field_validator
 from typing import Optional
+import re
 
 
 class KaryawanCreateRequest(BaseModel):
@@ -8,6 +9,7 @@ class KaryawanCreateRequest(BaseModel):
     jabatan:  str = "Kasir"
     cabang:   str = "JYP"
     gaji:     int = 0
+    password: str = ""
 
     @field_validator("nama")
     @classmethod
@@ -15,6 +17,13 @@ class KaryawanCreateRequest(BaseModel):
         if not v.strip():
             raise ValueError("Nama tidak boleh kosong")
         return v.strip()
+
+    @field_validator("password")
+    @classmethod
+    def password_ok(cls, v: str) -> str:
+        if v and len(v) < 6:
+            raise ValueError("Password minimal 6 karakter")
+        return v
 
 
 class KaryawanResponse(BaseModel):

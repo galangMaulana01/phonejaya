@@ -87,5 +87,5 @@ class UnitResponse(BaseModel):
     kategori:    str
     catatan:     str
     cabang:      str
-    locked:      bool   # True = tidak bisa diedit
-    service_id:  Optional[str] = None   # diisi kalau unit sedang / pernah di-repair
+    locked:      bool   
+    service_id:  Optional[str] = None
