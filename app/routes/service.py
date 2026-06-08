@@ -7,7 +7,7 @@ from app.config.database import get_db
 from app.schemas.service import ServiceUpdateRequest
 from app.schemas.common import ok
 from app.services import service_service
-from app.middlewares.auth import require_teknisi_or_owner, require_any, require_kasir_or_owner
+from app.middlewares.auth import require_teknisi_or_owner, require_any, require_kasir_or_owner, require_kepala_or_owner
 
 router = APIRouter(prefix="/service", tags=["Service"])
 
@@ -16,20 +16,22 @@ class FotoUrlRequest(BaseModel):
     url: str
 
 
+def _cabang_filter(user: dict, cabang_param: Optional[str]) -> Optional[str]:
+    if user.get("role") == "owner":
+        return cabang_param
+    return user.get("cabang")
+
+
 @router.get("")
 async def list_service(
     cabang: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     limit:  int = Query(100, ge=1, le=500),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    _user:  dict = Depends(require_any),
+    user:   dict = Depends(require_any),
 ):
-    """
-    List tiket service.
-    - Owner/Kasir: lihat semua
-    - Teknisi: lihat semua (filter by cabang di frontend)
-    """
-    items = await service_service.list_service(db, cabang=cabang, status=status, limit=limit)
+    cab = _cabang_filter(user, cabang)
+    items = await service_service.list_service(db, cabang=cab, status=status, limit=limit)
     return ok([i.model_dump() for i in items])
 
 
@@ -37,12 +39,10 @@ async def list_service(
 async def pending_approval(
     cabang: Optional[str] = Query(None),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    _user:  dict = Depends(require_kasir_or_owner),
+    user:   dict = Depends(require_kasir_or_owner),
 ):
-    """
-    Daftar tiket service yang sudah Selesai dan menunggu approval harga dari kasir/owner.
-    """
-    items = await service_service.list_service(db, cabang=cabang, status="Selesai", limit=500)
+    cab = _cabang_filter(user, cabang)
+    items = await service_service.list_service(db, cabang=cab, status="Selesai", limit=500)
     return ok([i.model_dump() for i in items])
 
 
@@ -63,15 +63,6 @@ async def update_service(
     db:    AsyncIOMotorDatabase = Depends(get_db),
     user:  dict = Depends(require_teknisi_or_owner),
 ):
-    """
-    Update tiket service oleh teknisi.
-    - Antrian → Proses (teknisi ambil pekerjaan)
-    - Proses  → Selesai (teknisi selesai, nunggu approval kasir/owner)
-    - Proses  → Ditolak (HP tidak bisa diperbaiki)
-    
-    Teknisi TIDAK bisa set status Approved.
-    Approved hanya lewat POST /units/{unit_id}/approve-repair
-    """
     item = await service_service.update_service(
         db, service_id, body,
         actor=user.get("name", user.get("username", "")),
@@ -87,6 +78,5 @@ async def add_foto_url(
     db:    AsyncIOMotorDatabase = Depends(get_db),
     user:  dict = Depends(require_teknisi_or_owner),
 ):
-    """Simpan URL foto dari layanan eksternal (ImgBB, Cloudinary, dll)."""
     item = await service_service.add_foto_url(db, service_id, body.url, actor=user.get("name", user.get("username", "")))
     return ok(item.model_dump(), message="Foto berhasil ditambahkan")

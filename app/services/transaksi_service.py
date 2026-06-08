@@ -114,7 +114,7 @@ async def create_transaksi_sparepart(
             }}
         )
 
-    trx_id = await next_trx_id(db)
+    trx_id = await next_trx_id(db, cabang=cabang)
     now    = datetime.now(timezone.utc)
     label  = ", ".join(labels)
     profit = total_jual - total_modal

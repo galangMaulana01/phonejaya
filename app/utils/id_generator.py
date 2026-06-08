@@ -24,9 +24,11 @@ async def next_unit_id(db, kat: str, kondisi: str, cabang: str = "JYP") -> str:
     return f"{cabang}-{kat}-{kondisi}-{str(seq).zfill(3)}"
 
 
-async def next_trx_id(db) -> str:
-    seq = await _next_seq(db, "TRX")
-    return f"TRX-{str(seq).zfill(3)}"
+async def next_trx_id(db, cabang: str = "") -> str:
+    key = f"TRX-{cabang}" if cabang else "TRX"
+    seq = await _next_seq(db, key)
+    prefix = f"{cabang}-TRX" if cabang else "TRX"
+    return f"{prefix}-{str(seq).zfill(3)}"
 
 
 async def next_service_id(db) -> str:

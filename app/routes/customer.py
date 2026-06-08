@@ -17,7 +17,8 @@ async def list_customer(
     db:     AsyncIOMotorDatabase = Depends(get_db),
     _user:  dict = Depends(require_kasir_or_owner),
 ):
-    items = await customer_service.list_customer(db, cabang=cabang, q=q)
+    cab = cabang if _user.get("role") == "owner" else _user.get("cabang")
+    items = await customer_service.list_customer(db, cabang=cab, q=q)
     return ok([i.model_dump() for i in items])
 
 

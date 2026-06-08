@@ -4,7 +4,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.database import get_db
 from app.schemas.common import ok
 from app.services import dashboard_service
-from app.middlewares.auth import require_owner
+from app.middlewares.auth import require_kepala_or_owner
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -13,19 +13,21 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 async def dashboard_stats(
     cabang: Optional[str] = Query(None),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    _user:  dict = Depends(require_owner),
+    user:   dict = Depends(require_kepala_or_owner),
 ):
-    stats = await dashboard_service.get_stats(db, cabang=cabang)
+    # Owner bisa filter bebas, kepala_cabang paksa cabangnya
+    cab = cabang if user.get("role") == "owner" else user.get("cabang")
+    stats = await dashboard_service.get_stats(db, cabang=cab)
     return ok(stats)
 
 
 @router.get("/trend")
 async def dashboard_trend(
     cabang: Optional[str] = Query(None),
-    hari:   int            = Query(30, ge=7, le=90),
+    hari:   int = Query(30, ge=7, le=90),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    _user:  dict = Depends(require_owner),
+    user:   dict = Depends(require_kepala_or_owner),
 ):
-    """Trend penjualan & profit per hari. Default 30 hari terakhir."""
-    data = await dashboard_service.get_trend(db, cabang=cabang, hari=hari)
+    cab = cabang if user.get("role") == "owner" else user.get("cabang")
+    data = await dashboard_service.get_trend(db, cabang=cab, hari=hari)
     return ok(data)
