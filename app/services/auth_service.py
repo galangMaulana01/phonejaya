@@ -7,7 +7,9 @@ from app.schemas.auth import TokenResponse, UserPublic
 async def login(db: AsyncIOMotorDatabase, username: str, password: str) -> TokenResponse:
     user = await db.users.find_one({"username": username})
 
-    if not user or not verify_password(password, user["password_hash"]):
+    # Support both "password_hash" (new) and "password" (legacy)
+    stored_hash = user.get("password_hash") or user.get("password", "")
+    if not user or not stored_hash or not verify_password(password, stored_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Username atau password salah",
