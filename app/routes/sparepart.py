@@ -5,7 +5,7 @@ from app.config.database import get_db
 from app.schemas.sparepart import SparepartCreateRequest, SparepartUpdateStokRequest
 from app.schemas.common import ok
 from app.services import sparepart as sparepart_service
-from app.middlewares.auth import require_owner, require_kasir_or_owner
+from app.middlewares.auth import require_owner, require_kasir_or_owner, require_kepala_or_owner
 
 router = APIRouter(prefix="/sparepart", tags=["Sparepart"])
 
@@ -25,7 +25,7 @@ async def list_sparepart(
 async def create_sparepart(
     body:  SparepartCreateRequest,
     db:    AsyncIOMotorDatabase = Depends(get_db),
-    user:  dict = Depends(require_owner),   # hanya owner
+    user:  dict = Depends(require_kepala_or_owner),
 ):
     sp = await sparepart_service.create_sparepart(db, payload=body, actor=user["name"])
     return ok(sp.model_dump(), message=f"{sp.sp_id} berhasil ditambahkan")
@@ -36,7 +36,7 @@ async def update_stok(
     sp_id: str,
     body:  SparepartUpdateStokRequest,
     db:    AsyncIOMotorDatabase = Depends(get_db),
-    user:  dict = Depends(require_owner),   # hanya owner
+    user:  dict = Depends(require_kepala_or_owner),
 ):
     sp = await sparepart_service.update_stok(db, sp_id=sp_id, payload=body, actor=user["name"])
     return ok(sp.model_dump(), message="Stok berhasil diupdate")

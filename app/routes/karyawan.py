@@ -5,7 +5,7 @@ from app.config.database import get_db
 from app.schemas.karyawan import KaryawanCreateRequest
 from app.schemas.common import ok
 from app.services import karyawan_service
-from app.middlewares.auth import require_owner
+from app.middlewares.auth import require_owner, require_kepala_or_owner
 
 router = APIRouter(prefix="/karyawan", tags=["Karyawan"])
 
