@@ -26,5 +26,5 @@ async def create_karyawan(
     db:   AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_owner),
 ):
-    item = await karyawan_service.create_karyawan(db, body, actor=user["name"])
+    item = await karyawan_service.create_karyawan(db, body, actor=user.get("name", user.get("username", "")))
     return ok(item.model_dump(), message="Karyawan berhasil ditambahkan")

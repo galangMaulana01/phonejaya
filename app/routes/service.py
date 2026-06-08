@@ -74,7 +74,7 @@ async def update_service(
     """
     item = await service_service.update_service(
         db, service_id, body,
-        actor=user["name"],
+        actor=user.get("name", user.get("username", "")),
         actor_role=user.get("role", ""),
     )
     return ok(item.model_dump(), message="Service berhasil diupdate")
@@ -88,5 +88,5 @@ async def add_foto_url(
     user:  dict = Depends(require_teknisi_or_owner),
 ):
     """Simpan URL foto dari layanan eksternal (ImgBB, Cloudinary, dll)."""
-    item = await service_service.add_foto_url(db, service_id, body.url, actor=user["name"])
+    item = await service_service.add_foto_url(db, service_id, body.url, actor=user.get("name", user.get("username", "")))
     return ok(item.model_dump(), message="Foto berhasil ditambahkan")

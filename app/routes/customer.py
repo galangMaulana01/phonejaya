@@ -27,5 +27,5 @@ async def create_customer(
     db:    AsyncIOMotorDatabase = Depends(get_db),
     user:  dict = Depends(require_kasir_or_owner),
 ):
-    item = await customer_service.create_customer(db, body, actor=user["name"])
+    item = await customer_service.create_customer(db, body, actor=user.get("name", user.get("username", "")))
     return ok(item.model_dump(), message="Customer berhasil ditambahkan")

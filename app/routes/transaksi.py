@@ -37,7 +37,7 @@ async def create_transaksi(
 ):
     """Jual HP."""
     trx = await transaksi_service.create_transaksi(
-        db, payload=body, kasir_name=user["name"], cabang=user["cabang"],
+        db, payload=body, kasir_name=user.get("name", user.get("username", "")), cabang=user["cabang"],
     )
     return ok(trx.model_dump(), message=f"Transaksi {trx.trx_id} berhasil dicatat")
 
@@ -50,6 +50,6 @@ async def create_transaksi_sparepart(
 ):
     """Jual sparepart / aksesoris."""
     trx = await transaksi_service.create_transaksi_sparepart(
-        db, payload=body, kasir_name=user["name"], cabang=user["cabang"],
+        db, payload=body, kasir_name=user.get("name", user.get("username", "")), cabang=user["cabang"],
     )
     return ok(trx.model_dump(), message=f"Transaksi {trx.trx_id} berhasil dicatat")

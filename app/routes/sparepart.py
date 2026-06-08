@@ -27,7 +27,7 @@ async def create_sparepart(
     db:    AsyncIOMotorDatabase = Depends(get_db),
     user:  dict = Depends(require_kepala_or_owner),
 ):
-    sp = await sparepart_service.create_sparepart(db, payload=body, actor=user["name"])
+    sp = await sparepart_service.create_sparepart(db, payload=body, actor=user.get("name", user.get("username", "")))
     return ok(sp.model_dump(), message=f"{sp.sp_id} berhasil ditambahkan")
 
 
@@ -38,5 +38,5 @@ async def update_stok(
     db:    AsyncIOMotorDatabase = Depends(get_db),
     user:  dict = Depends(require_kepala_or_owner),
 ):
-    sp = await sparepart_service.update_stok(db, sp_id=sp_id, payload=body, actor=user["name"])
+    sp = await sparepart_service.update_stok(db, sp_id=sp_id, payload=body, actor=user.get("name", user.get("username", "")))
     return ok(sp.model_dump(), message="Stok berhasil diupdate")

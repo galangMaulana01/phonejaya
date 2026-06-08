@@ -17,9 +17,12 @@ async def login(db: AsyncIOMotorDatabase, username: str, password: str) -> Token
         raise HTTPException(status_code=403, detail="Akun tidak aktif")
 
     token = create_access_token({
-        "sub": str(user["_id"]),
-        "role": user["role"],
-        "cabang": user["cabang"],
+        "sub":      str(user["_id"]),
+        "role":     user["role"],
+        "cabang":   user.get("cabang", ""),
+        "name":     user.get("name", user.get("username", "")),
+        "username": user.get("username", ""),
+        "aktif":    user.get("aktif", True),
     })
 
     return TokenResponse(

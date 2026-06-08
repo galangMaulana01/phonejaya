@@ -27,7 +27,7 @@ async def tambah_cabang(
     db:   AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_owner),
 ):
-    cab = await create_cabang(db, payload=body, actor=user["name"])
+    cab = await create_cabang(db, payload=body, actor=user.get("name", user.get("username", "")))
     return ok(cab.model_dump(), message=f"Cabang {cab.kode} berhasil ditambahkan")
 
 
@@ -38,7 +38,7 @@ async def edit_cabang(
     db:   AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_owner),
 ):
-    cab = await update_cabang(db, kode=kode.upper(), payload=body, actor=user["name"])
+    cab = await update_cabang(db, kode=kode.upper(), payload=body, actor=user.get("name", user.get("username", "")))
     return ok(cab.model_dump(), message="Cabang berhasil diupdate")
 
 
@@ -49,7 +49,7 @@ async def set_kepala_cabang(
     db:   AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_owner),
 ):
-    cab = await assign_kepala_cabang(db, kode=kode.upper(), payload=body, actor=user["name"])
+    cab = await assign_kepala_cabang(db, kode=kode.upper(), payload=body, actor=user.get("name", user.get("username", "")))
     return ok(cab.model_dump(), message=f"Kepala cabang {kode} berhasil diset")
 
 
@@ -59,5 +59,5 @@ async def fire_karyawan(
     db:          AsyncIOMotorDatabase = Depends(get_db),
     user:        dict = Depends(require_owner),
 ):
-    result = await pecat_karyawan(db, karyawan_id=karyawan_id, actor=user["name"])
+    result = await pecat_karyawan(db, karyawan_id=karyawan_id, actor=user.get("name", user.get("username", "")))
     return ok(result, message=f"{result['nama']} telah dinonaktifkan")

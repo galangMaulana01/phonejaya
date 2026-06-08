@@ -37,7 +37,7 @@ async def create_unit(
     Unit LANGSUNG di-lock setelah posting.
     Tidak ada endpoint edit unit.
     """
-    unit = await unit_service.create_unit(db, body, actor=user["name"])
+    unit = await unit_service.create_unit(db, body, actor=user.get("name", user.get("username", "")))
     msg = (
         f"Unit {unit.unit_id} berhasil diposting → Stok Tersedia"
         if unit.kondisi_hp == "Mulus"
@@ -58,7 +58,7 @@ async def approve_repair(
     Unit akan pindah ke stok Tersedia.
     Syarat: status tiket service harus 'Selesai' dulu.
     """
-    unit = await unit_service.approve_repair(db, unit_id, body, actor=user["name"])
+    unit = await unit_service.approve_repair(db, unit_id, body, actor=user.get("name", user.get("username", "")))
     return ok(
         unit.model_dump(),
         message=f"Unit {unit_id} disetujui → masuk stok Tersedia"
