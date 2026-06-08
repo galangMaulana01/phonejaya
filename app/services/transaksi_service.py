@@ -22,8 +22,10 @@ def _fmt(doc: dict) -> TransaksiResponse:
         harga_modal = doc["harga_modal"],
         profit      = doc["profit"],
         waktu       = fmt_waktu(doc.get("waktu", datetime.now(timezone.utc))),
-        catatan     = doc.get("catatan", ""),
-        cabang      = doc["cabang"],
+        catatan       = doc.get("catatan", ""),
+        garansi_hari  = doc.get("garansi_hari", 7),
+        biaya_garansi = doc.get("biaya_garansi", 0),
+        cabang        = doc["cabang"],
     )
 
 
@@ -53,7 +55,8 @@ async def create_transaksi(
     )
 
     trx_id = await next_trx_id(db)
-    profit = unit["harga_jual"] - unit["harga_modal"]
+    biaya_garansi = payload.biaya_garansi
+    profit = unit["harga_jual"] + biaya_garansi - unit["harga_modal"]
     now    = datetime.now(timezone.utc)
     unit_label = f"{unit['merk']} {unit['tipe']} {unit['storage']}"
 
@@ -63,9 +66,11 @@ async def create_transaksi(
         "unit_id":     payload.unit_id,
         "unit_label":  unit_label,
         "kasir":       kasir_name,
-        "harga_jual":  unit["harga_jual"],
+        "harga_jual":  unit["harga_jual"] + biaya_garansi,
         "harga_modal": unit["harga_modal"],
         "profit":      profit,
+        "garansi_hari": payload.garansi_hari,
+        "biaya_garansi": biaya_garansi,
         "waktu":       now,
         "catatan":     payload.catatan,
         "cabang":      cabang,

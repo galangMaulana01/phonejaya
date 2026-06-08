@@ -5,8 +5,10 @@ from typing import Optional, List
 class TransaksiCreateRequest(BaseModel):
     """Transaksi jual HP."""
     unit_id:  str
-    imei:     str
-    catatan:  str = ""
+    imei:          str
+    catatan:       str = ""
+    garansi_hari:  int = 7     # 7 atau 30
+    biaya_garansi: int = 0     # 0 atau 100000
 
 
 class TransaksiSparepartItem(BaseModel):
@@ -31,5 +33,7 @@ class TransaksiResponse(BaseModel):
     harga_modal: int
     profit:      int
     waktu:       str
-    catatan:     str
-    cabang:      str
+    catatan:      str
+    garansi_hari: int = 7
+    biaya_garansi: int = 0
+    cabang:       str
