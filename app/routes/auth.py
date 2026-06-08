@@ -16,10 +16,12 @@ async def login(body: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
 
 @router.get("/me")
 async def me(current_user: dict = Depends(get_current_user)):
+    # JWT payload pakai "sub" untuk id, bukan "_id"
     return ok({
-        "id":       str(current_user["_id"]),
+        "id":       current_user.get("sub", ""),
         "username": current_user.get("username", ""),
-        "name":     current_user.get("name", user.get("username", "")),
-        "role":     current_user["role"],
-        "cabang":   current_user["cabang"],
+        "name":     current_user.get("name", current_user.get("username", "")),
+        "role":     current_user.get("role", ""),
+        "cabang":   current_user.get("cabang", ""),
+        "aktif":    current_user.get("aktif", True),
     })
