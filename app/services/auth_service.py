@@ -29,9 +29,9 @@ async def login(db: AsyncIOMotorDatabase, username: str, password: str) -> Token
         access_token=token,
         user=UserPublic(
             id=str(user["_id"]),
-            username=user["username"],
-            name=user["name"],
-            role=user["role"],
-            cabang=user["cabang"],
+            username=user.get("username", ""),
+            name=user.get("name", user.get("username", "")),
+            role=user.get("role", ""),
+            cabang=user.get("cabang", ""),
         ),
     )

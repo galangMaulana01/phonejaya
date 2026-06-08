@@ -113,7 +113,7 @@ async def assign_kepala_cabang(
     await db.users.insert_one({
         "name":       payload.nama,
         "username":   payload.username,
-        "password":   hash_password(payload.password),
+        "password_hash": hash_password(payload.password),
         "role":       "kepala_cabang",
         "cabang":     kode,
         "aktif":      True,
