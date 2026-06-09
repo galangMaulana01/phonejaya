@@ -5,7 +5,7 @@ agar kompatibel dengan Vercel serverless environment.
 import bcrypt
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from jose import jwt
+from jose import jwt, JWTError, ExpiredSignatureError
 from app.config.settings import settings
 
 
@@ -33,5 +33,11 @@ def create_access_token(payload: dict, expires_delta: Optional[timedelta] = None
     return jwt.encode(data, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_token(token: str) -> dict:
-    return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+def decode_token(token: str) -> Optional[dict]:
+    """Return payload dict, atau None jika token invalid/expired."""
+    try:
+        return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    except ExpiredSignatureError:
+        return None   # Frontend akan handle 401 → redirect login
+    except JWTError:
+        return None
