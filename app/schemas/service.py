@@ -39,6 +39,7 @@ class ServiceUpdateRequest(BaseModel):
     status:            Optional[StatusServiceEnum] = None
     catatan_kerusakan: Optional[str] = None
     teknisi:           Optional[str] = None
+    estimasi_selesai:  Optional[str] = None
 
 
 class ServiceResponse(BaseModel):
@@ -54,5 +55,6 @@ class ServiceResponse(BaseModel):
     teknisi:          str
     foto_urls:        List[str]
     cabang:           str
+    estimasi_selesai: Optional[str] = None
     created_at:       str
     updated_at:       Optional[str] = None

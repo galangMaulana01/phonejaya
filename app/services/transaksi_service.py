@@ -29,9 +29,15 @@ def _fmt(doc: dict) -> TransaksiResponse:
     )
 
 
-async def list_transaksi(db, cabang: Optional[str] = None, limit: int = 100) -> List[TransaksiResponse]:
-    query = {}
+async def list_transaksi(db, cabang=None, limit=100, date_from=None, date_to=None):
+    from datetime import datetime, timezone
+    query: dict = {}
     if cabang: query["cabang"] = cabang
+    if date_from or date_to:
+        wf: dict = {}
+        if date_from: wf["$gte"] = datetime.fromisoformat(date_from.replace("Z","")).replace(tzinfo=timezone.utc)
+        if date_to:   wf["$lte"] = datetime.fromisoformat(date_to.replace("Z","")).replace(tzinfo=timezone.utc)
+        query["waktu"] = wf
     docs = await db.transaksi.find(query).sort("waktu", -1).limit(limit).to_list(length=limit)
     return [_fmt(d) for d in docs]
 

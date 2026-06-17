@@ -12,18 +12,15 @@ router = APIRouter(prefix="/transaksi", tags=["Transaksi"])
 
 @router.get("")
 async def list_transaksi(
-    cabang: Optional[str] = Query(None),
-    limit:  int = Query(100, ge=1, le=500),
-    db:     AsyncIOMotorDatabase = Depends(get_db),
-    user:   dict = Depends(require_kepala_or_owner),
+    cabang:    Optional[str] = Query(None),
+    limit:     int = Query(100, ge=1, le=500),
+    date_from: Optional[str] = Query(None),
+    date_to:   Optional[str] = Query(None),
+    db:        AsyncIOMotorDatabase = Depends(get_db),
+    user:      dict = Depends(require_kepala_or_owner),
 ):
-    # Owner lihat semua, kepala_cabang hanya cabangnya
-    if user.get("role") == "owner":
-        cab = cabang
-    else:
-        cab = user.get("cabang")
-
-    items = await transaksi_service.list_transaksi(db, cabang=cab, limit=limit)
+    cab = cabang if user.get("role") == "owner" else user.get("cabang")
+    items = await transaksi_service.list_transaksi(db, cabang=cab, limit=limit, date_from=date_from, date_to=date_to)
     return ok([i.model_dump() for i in items])
 
 

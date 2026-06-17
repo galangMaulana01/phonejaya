@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config.settings import settings
-from app.routes import auth, units, transaksi, karyawan, log, dashboard, service, customer, sparepart, cabang
+from app.routes import auth, units, transaksi, karyawan, log, dashboard, service, customer, sparepart, cabang, request_sparepart
 
 logging.basicConfig(
     level=logging.INFO if settings.is_production else logging.DEBUG,

@@ -27,6 +27,7 @@ def _fmt(doc: dict) -> ServiceResponse:
         teknisi=doc.get("teknisi", ""),
         foto_urls=doc.get("foto_urls", []),
         cabang=doc.get("cabang", ""),
+        estimasi_selesai=doc.get("estimasi_selesai"),
         created_at=fmt_waktu(doc["created_at"]) if doc.get("created_at") else "",
         updated_at=fmt_waktu(doc["updated_at"]) if doc.get("updated_at") else None,
     )
@@ -108,6 +109,9 @@ async def update_service(
 
         updates["status"] = new_status
 
+        if new_status == "Proses" and not payload.estimasi_selesai:
+            raise HTTPException(status_code=422, detail="Estimasi selesai wajib diisi saat mengubah status ke Proses")
+
         # Kalau Ditolak → update unit kembali ke status khusus
         if new_status == "Ditolak":
             await db.units.update_one(
@@ -125,6 +129,9 @@ async def update_service(
 
     if payload.catatan_kerusakan is not None:
         updates["catatan_kerusakan"] = payload.catatan_kerusakan
+
+    if payload.estimasi_selesai:
+        updates["estimasi_selesai"] = payload.estimasi_selesai
 
     if payload.teknisi is not None:
         updates["teknisi"] = payload.teknisi
