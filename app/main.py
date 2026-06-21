@@ -5,7 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config.settings import settings
-from app.routes import auth, units, transaksi, karyawan, log, dashboard, service, customer, sparepart, cabang, request_sparepart
+from app.routes import (
+    auth, units, transaksi, karyawan, log, dashboard,
+    service, customer, sparepart, cabang, request_sparepart,
+    transfer_stok,                                           # ← NEW
+)
 
 logging.basicConfig(
     level=logging.INFO if settings.is_production else logging.DEBUG,
@@ -43,17 +47,18 @@ def create_app() -> FastAPI:
 
     # Routes
     PREFIX = "/api/v1"
-    app.include_router(auth.router,      prefix=PREFIX)
-    app.include_router(units.router,     prefix=PREFIX)
-    app.include_router(transaksi.router, prefix=PREFIX)
-    app.include_router(karyawan.router,  prefix=PREFIX)
-    app.include_router(log.router,       prefix=PREFIX)
-    app.include_router(dashboard.router, prefix=PREFIX)
-    app.include_router(service.router,   prefix=PREFIX)
-    app.include_router(customer.router,  prefix=PREFIX)
-    app.include_router(sparepart.router, prefix=PREFIX)
-    app.include_router(cabang.router,   prefix=PREFIX)
+    app.include_router(auth.router,              prefix=PREFIX)
+    app.include_router(units.router,             prefix=PREFIX)
+    app.include_router(transaksi.router,         prefix=PREFIX)
+    app.include_router(karyawan.router,          prefix=PREFIX)
+    app.include_router(log.router,               prefix=PREFIX)
+    app.include_router(dashboard.router,         prefix=PREFIX)
+    app.include_router(service.router,           prefix=PREFIX)
+    app.include_router(customer.router,          prefix=PREFIX)
+    app.include_router(sparepart.router,         prefix=PREFIX)
+    app.include_router(cabang.router,            prefix=PREFIX)
     app.include_router(request_sparepart.router, prefix=PREFIX)
+    app.include_router(transfer_stok.router,     prefix=PREFIX)  # ← NEW
 
     @app.get("/health", tags=["Health"])
     async def health():
