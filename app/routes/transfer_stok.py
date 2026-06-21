@@ -91,6 +91,22 @@ async def respon_transfer(
     return ok(item.model_dump(), message=f"Transfer {transfer_id} {item.status}")
 
 
+# ── Cabang list untuk form transfer (kepala_cabang tidak bisa akses GET /cabang) ──
+
+@router.get("/cabang-list")
+async def list_cabang_for_transfer(
+    db:   AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kepala_or_owner),
+):
+    """
+    List cabang aktif — dipakai form transfer.
+    Kepala cabang tidak bisa akses GET /cabang (owner only),
+    jadi endpoint ini sebagai alternatif yang aman.
+    """
+    docs = await db.cabang.find({"aktif": {"$ne": False}}).to_list(length=None)
+    return ok([{"kode": d["kode"], "nama": d.get("nama", "")} for d in docs])
+
+
 # ── Notifikasi polling endpoint ───────────────────────────────────────────────
 
 @router.get("/notif/count")
