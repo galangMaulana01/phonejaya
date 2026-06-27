@@ -1,7 +1,45 @@
-"""
-Tambahkan endpoint ini ke app/routes/karyawan.py
-Paste SEBELUM baris terakhir file (sebelum closing atau setelah router.post terakhir)
-"""
+from fastapi import APIRouter, Depends, Query
+from typing import Optional
+from datetime import datetime, timezone, timedelta
+from bson import ObjectId
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
+from app.config.database import get_db
+from app.schemas.karyawan import KaryawanCreateRequest
+from app.schemas.common import ok
+from app.services import karyawan_service
+from app.middlewares.auth import require_owner, require_kepala_or_owner
+
+router = APIRouter(prefix="/karyawan", tags=["Karyawan"])
+
+
+@router.get("")
+async def list_karyawan(
+    cabang: Optional[str] = Query(None),
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_kepala_or_owner),
+):
+    if user.get("role") == "owner":
+        cab = cabang
+    else:
+        cab = user.get("cabang")
+
+    items = await karyawan_service.list_karyawan(db, cabang=cab)
+    return ok([i.model_dump() for i in items])
+
+
+@router.post("", status_code=201)
+async def tambah_karyawan(
+    body: KaryawanCreateRequest,
+    db:   AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kepala_or_owner),
+):
+    kar = await karyawan_service.create_karyawan(
+        db, payload=body,
+        actor=user.get("name", user.get("username", "")),
+    )
+    return ok(kar.model_dump(), message=f"Karyawan {kar.nama} berhasil ditambahkan")
+
 
 @router.get("/{karyawan_id}/stats")
 async def get_karyawan_stats(
@@ -17,8 +55,7 @@ async def get_karyawan_stats(
     - Kasir   : jumlah transaksi, total omzet, total profit, trend harian
     - Teknisi : jumlah service selesai per status, rata2 per hari, trend harian
     """
-    from datetime import datetime, timezone, timedelta
-    from bson import ObjectId
+    from fastapi import HTTPException
 
     # Fetch karyawan
     try:
@@ -26,12 +63,10 @@ async def get_karyawan_stats(
     except Exception:
         kar = None
     if not kar:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Karyawan tidak ditemukan")
 
     # Guard: kepala_cabang hanya bisa lihat karyawan cabangnya
     if user.get("role") == "kepala_cabang" and kar.get("cabang") != user.get("cabang"):
-        from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Akses ditolak")
 
     # Hitung rentang tanggal
@@ -52,23 +87,21 @@ async def get_karyawan_stats(
         "nama":        nama,
         "jabatan":     jabatan,
         "cabang":      kar.get("cabang", ""),
-        "periode":     {
-            "dari":    dt_from.strftime("%Y-%m-%d"),
-            "sampai":  dt_to.strftime("%Y-%m-%d"),
+        "periode": {
+            "dari":   dt_from.strftime("%Y-%m-%d"),
+            "sampai": dt_to.strftime("%Y-%m-%d"),
         },
     }
 
     if jabatan == "Kasir":
-        # Ambil semua transaksi dalam periode by kasir name
         trx_list = await db.transaksi.find({
-            "kasir":  nama,
-            "waktu":  {"$gte": dt_from, "$lte": dt_to},
+            "kasir": nama,
+            "waktu": {"$gte": dt_from, "$lte": dt_to},
         }).sort("waktu", 1).to_list(length=None)
 
         total_omzet  = sum(t.get("harga_jual", 0) for t in trx_list)
         total_profit = sum(t.get("profit", 0) for t in trx_list)
 
-        # Trend harian — group by date
         trend: dict = {}
         for t in trx_list:
             waktu = t.get("waktu")
@@ -84,27 +117,24 @@ async def get_karyawan_stats(
             "total_omzet":      total_omzet,
             "total_profit":     total_profit,
             "rata_per_hari":    round(len(trx_list) / max((dt_to - dt_from).days, 1), 1),
-            "trend_harian":     [
+            "trend_harian": [
                 {"tanggal": d, "omzet": v["omzet"], "jumlah": v["jumlah"]}
                 for d, v in sorted(trend.items())
             ],
         }
 
     elif jabatan == "Teknisi":
-        # Ambil semua service yang dikerjakan teknisi ini dalam periode
         svc_list = await db.service.find({
-            "teknisi": nama,
+            "teknisi":    nama,
             "updated_at": {"$gte": dt_from, "$lte": dt_to},
         }).sort("updated_at", 1).to_list(length=None)
 
-        # Juga cek service yang dibuat dalam periode (mungkin belum selesai)
         svc_created = await db.service.find({
-            "teknisi": nama,
+            "teknisi":    nama,
             "created_at": {"$gte": dt_from, "$lte": dt_to},
         }).sort("created_at", 1).to_list(length=None)
 
-        # Merge & deduplikasi
-        all_ids = set()
+        all_ids: set = set()
         all_svc = []
         for s in svc_list + svc_created:
             sid = str(s["_id"])
@@ -112,7 +142,6 @@ async def get_karyawan_stats(
                 all_ids.add(sid)
                 all_svc.append(s)
 
-        # Count per status
         status_count: dict = {}
         for s in all_svc:
             st = s.get("status", "unknown")
@@ -120,23 +149,22 @@ async def get_karyawan_stats(
 
         selesai_count = status_count.get("Selesai", 0) + status_count.get("Approved", 0)
 
-        # Trend harian selesai
-        trend: dict = {}
+        trend2: dict = {}
         for s in all_svc:
             if s.get("status") in ("Selesai", "Approved"):
                 waktu = s.get("updated_at") or s.get("created_at")
                 if waktu:
                     day = waktu.strftime("%Y-%m-%d")
-                    trend[day] = trend.get(day, 0) + 1
+                    trend2[day] = trend2.get(day, 0) + 1
 
         stats["teknisi"] = {
-            "total_service":     len(all_svc),
-            "jumlah_selesai":    selesai_count,
-            "status_breakdown":  status_count,
-            "rata_selesai_per_hari": round(selesai_count / max((dt_to - dt_from).days, 1), 1),
+            "total_service":          len(all_svc),
+            "jumlah_selesai":         selesai_count,
+            "status_breakdown":       status_count,
+            "rata_selesai_per_hari":  round(selesai_count / max((dt_to - dt_from).days, 1), 1),
             "trend_harian": [
                 {"tanggal": d, "selesai": v}
-                for d, v in sorted(trend.items())
+                for d, v in sorted(trend2.items())
             ],
         }
 
