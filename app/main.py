@@ -58,7 +58,7 @@ def create_app() -> FastAPI:
     app.include_router(sparepart.router,         prefix=PREFIX)
     app.include_router(cabang.router,            prefix=PREFIX)
     app.include_router(request_sparepart.router, prefix=PREFIX)
-    app.include_router(transfer_stok.router,     prefix=PREFIX)  # ← NEW
+    app.include_router(transfer_stok.router,     prefix=PREFIX)
 
     @app.get("/health", tags=["Health"])
     async def health():
