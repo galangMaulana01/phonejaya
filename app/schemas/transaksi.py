@@ -11,6 +11,7 @@ class TransaksiCreateRequest(BaseModel):
     biaya_garansi: int = 0     # 0 atau 100000
     customer_nama: str = ""    # nama pembeli (optional - jika baru akan auto-create)
     customer_kontak: str = ""  # kontak pembeli (optional)
+    poin_dipakai: int = 0      # poin yang ingin ditukar (1 poin = Rp 1.000 diskon)
 
 
 class TransaksiSparepartItem(BaseModel):
@@ -38,4 +39,6 @@ class TransaksiResponse(BaseModel):
     catatan:      str
     garansi_hari: int = 7
     biaya_garansi: int = 0
+    poin_dipakai: int = 0
+    poin_dapat: int = 0
     cabang:       str

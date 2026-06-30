@@ -26,6 +26,8 @@ def _fmt(doc: dict) -> TransaksiResponse:
         catatan       = doc.get("catatan", ""),
         garansi_hari  = doc.get("garansi_hari", 7),
         biaya_garansi = doc.get("biaya_garansi", 0),
+        poin_dipakai  = doc.get("poin_dipakai", 0),
+        poin_dapat    = doc.get("poin_dapat", 0),
         cabang        = doc["cabang"],
     )
 
@@ -44,7 +46,8 @@ async def list_transaksi(db, cabang=None, limit=100, date_from=None, date_to=Non
 
 
 async def create_transaksi(
-    db, payload: TransaksiCreateRequest, kasir_name: str, cabang: str
+    db, payload: TransaksiCreateRequest, kasir_name: str, cabang: str,
+    poin_dipakai: int = 0,
 ) -> TransaksiResponse:
     """Jual HP."""
     # Atomic check-and-lock: only matches if status is still "Tersedia"
@@ -92,7 +95,38 @@ async def create_transaksi(
 
     trx_id = await next_trx_id(db)
     biaya_garansi = payload.biaya_garansi
-    profit = unit["harga_jual"] + biaya_garansi - unit["harga_modal"]
+
+    # ── Points logic ──
+    customer_doc = None
+    if payload.customer_nama and payload.customer_nama.strip():
+        customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
+
+    harga_jual_base = unit["harga_jual"] + biaya_garansi
+
+    if customer_doc and poin_dipakai > 0:
+        if poin_dipakai > customer_doc.get("points", 0):
+            raise HTTPException(status_code=400, detail="Poin customer tidak cukup")
+        diskon_poin = poin_dipakai * 1000
+        harga_jual_final = harga_jual_base - diskon_poin
+        if harga_jual_final < 0:
+            raise HTTPException(status_code=400, detail="Poin terlalu banyak, harga tidak boleh negatif")
+    else:
+        harga_jual_final = harga_jual_base
+        poin_dipakai = 0  # pastikan 0 jika tidak ada customer
+
+    poin_baru = int(harga_jual_final // 100000)
+
+    # Update customer points (deduct used + add earned)
+    if customer_doc:
+        net_poin = -poin_dipakai + poin_baru
+        if net_poin != 0:
+            await db.customers.update_one(
+                {"_id": customer_doc["_id"]},
+                {"$inc": {"points": net_poin}}
+            )
+    # ── End points logic ──
+
+    profit = harga_jual_final - unit["harga_modal"]
     now    = datetime.now(timezone.utc)
     unit_label = f"{unit['merk']} {unit['tipe']} {unit['storage']}"
 
@@ -102,11 +136,13 @@ async def create_transaksi(
         "unit_id":     payload.unit_id,
         "unit_label":  unit_label,
         "kasir":       kasir_name,
-        "harga_jual":  unit["harga_jual"] + biaya_garansi,
+        "harga_jual":  harga_jual_final,
         "harga_modal": unit["harga_modal"],
         "profit":      profit,
         "garansi_hari": payload.garansi_hari,
         "biaya_garansi": biaya_garansi,
+        "poin_dipakai":  poin_dipakai,
+        "poin_dapat":    poin_baru,
         "waktu":       now,
         "catatan":     payload.catatan,
         "cabang":      cabang,

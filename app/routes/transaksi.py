@@ -34,6 +34,7 @@ async def create_transaksi(
         db, payload=body,
         kasir_name=user.get("name", user.get("username", "")),
         cabang=user.get("cabang", ""),
+        poin_dipakai=body.poin_dipakai,
     )
     return ok(trx.model_dump(), message=f"Transaksi {trx.trx_id} berhasil dicatat")
 

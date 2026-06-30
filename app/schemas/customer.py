@@ -21,3 +21,4 @@ class CustomerResponse(BaseModel):
     kontak: str
     cabang: str
     created_at: str
+    points: int = 0

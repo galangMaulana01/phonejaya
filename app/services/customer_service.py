@@ -11,6 +11,7 @@ def _fmt(doc: dict) -> CustomerResponse:
         id=str(doc["_id"]), nama=doc["nama"],
         kontak=doc["kontak"], cabang=doc["cabang"],
         created_at=fmt_waktu(doc["created_at"]),
+        points=doc.get("points", 0),
     )
 
 
@@ -26,6 +27,7 @@ async def create_customer(db, payload: CustomerCreateRequest, actor: str) -> Cus
     doc = {
         "nama": payload.nama, "kontak": payload.kontak,
         "cabang": payload.cabang, "created_at": datetime.now(timezone.utc),
+        "points": 0,
     }
     result = await db.customers.insert_one(doc)
     doc["_id"] = result.inserted_id
