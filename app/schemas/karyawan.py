@@ -18,6 +18,14 @@ class KaryawanCreateRequest(BaseModel):
             raise ValueError("Nama tidak boleh kosong")
         return v.strip()
 
+    @field_validator("jabatan")
+    @classmethod
+    def jabatan_valid(cls, v: str) -> str:
+        allowed = ["Kasir", "Teknisi", "Owner", "Admin"]
+        if v not in allowed:
+            raise ValueError(f"Jabatan harus salah satu: {', '.join(allowed)}")
+        return v
+
     @field_validator("password")
     @classmethod
     def password_ok(cls, v: str) -> str:

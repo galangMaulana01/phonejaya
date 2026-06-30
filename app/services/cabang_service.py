@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
+from pymongo.errors import DuplicateKeyError
 
 from app.schemas.cabang import (
     CabangCreateRequest, CabangUpdateRequest,
@@ -110,16 +111,20 @@ async def assign_kepala_cabang(
         )
 
     # Buat akun kepala cabang baru
-    await db.users.insert_one({
-        "name":       payload.nama,
-        "username":   payload.username,
-        "password_hash": hash_password(payload.password),
-        "role":       "kepala_cabang",
-        "cabang":     kode,
-        "aktif":      True,
-        "created_at": now,
-        "created_by": actor,
-    })
+    # Buat akun kepala cabang baru - handle race condition dengan try/except DuplicateKeyError
+    try:
+        await db.users.insert_one({
+            "name":       payload.nama,
+            "username":   payload.username,
+            "password_hash": hash_password(payload.password),
+            "role":       "kepala_cabang",
+            "cabang":     kode,
+            "aktif":      True,
+            "created_at": now,
+            "created_by": actor,
+        })
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail=f"Username '{payload.username}' baru saja digunakan (race condition)")
 
     # Simpan juga ke karyawan
     await db.karyawan.insert_one({

@@ -12,7 +12,7 @@ from app.schemas.transfer_stok import (
 )
 from app.services.log_service import write_log
 from app.utils.formatters import fmt_waktu
-from app.utils.id_generator import next_unit_id
+from app.utils.id_generator import next_unit_id, _parse_kode
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -56,22 +56,6 @@ async def _next_transfer_id(db: AsyncIOMotorDatabase) -> str:
         return_document=True,
     )
     return f"TRF-{str(res['seq']).zfill(3)}"
-
-
-def _parse_kode(unit_id: str) -> tuple[str, str]:
-    """
-    Ekstrak kat_kode dan kondisi_kode dari unit_id.
-    Format: {CABANG}-{KAT}-{KONDISI}-{SEQ}
-    Contoh: JYP-IP-BN-001 → ('IP', 'BN')
-    """
-    parts = unit_id.split("-")
-    if len(parts) < 4:
-        raise ValueError(f"Format unit_id tidak valid: {unit_id}")
-    # parts[0] = cabang, parts[1] = kat, parts[2] = kondisi, parts[-1] = seq
-    kat_kode     = parts[1]
-    kondisi_kode = parts[2]
-    return kat_kode, kondisi_kode
-
 
 # ── Service Functions ─────────────────────────────────────────────────────────
 
@@ -313,12 +297,16 @@ async def _proses_terima(
         })
 
         # Log per unit
-        await write_log(
-            db, actor,
-            "Transfer Stok Diterima",
-            f"{transfer_id} • {unit_id_asal} → {unit_id_baru} | {cabang_asal} → {cabang_tujuan}",
-            cabang_tujuan,  # log di cabang tujuan (penerima)
-        )
+        try:
+            await write_log(
+                db, actor,
+                "Transfer Stok Diterima",
+                f"{transfer_id} • {unit_id_asal} → {unit_id_baru} | {cabang_asal} → {cabang_tujuan}",
+                cabang_tujuan,  # log di cabang tujuan (penerima)
+            )
+        except Exception:
+            # Log gagal tidak boleh menghentikan proses terima
+            pass
 
     # Update embedded unit_id_baru di dokumen transfer
     updated_units = list(doc.get("units", []))

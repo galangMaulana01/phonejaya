@@ -58,10 +58,12 @@ async def get_karyawan_stats(
     from fastapi import HTTPException
 
     # Fetch karyawan
+    # Validate ObjectId
     try:
-        kar = await db.karyawan.find_one({"_id": ObjectId(karyawan_id)})
+        oid = ObjectId(karyawan_id)
     except Exception:
-        kar = None
+        raise HTTPException(status_code=400, detail="ID karyawan tidak valid")
+    kar = await db.karyawan.find_one({"_id": oid})
     if not kar:
         raise HTTPException(status_code=404, detail="Karyawan tidak ditemukan")
 
@@ -124,23 +126,15 @@ async def get_karyawan_stats(
         }
 
     elif jabatan == "Teknisi":
-        svc_list = await db.service.find({
-            "teknisi":    nama,
-            "updated_at": {"$gte": dt_from, "$lte": dt_to},
+        # Query service by updated_at (untuk status Selesai/Approved) ATAU created_at (untuk yang lain)
+        # Pakai $or untuk menghindari double-count
+        all_svc = await db.service.find({
+            "teknisi": nama,
+            "$or": [
+                {"updated_at": {"$gte": dt_from, "$lte": dt_to}},
+                {"created_at": {"$gte": dt_from, "$lte": dt_to}}
+            ]
         }).sort("updated_at", 1).to_list(length=None)
-
-        svc_created = await db.service.find({
-            "teknisi":    nama,
-            "created_at": {"$gte": dt_from, "$lte": dt_to},
-        }).sort("created_at", 1).to_list(length=None)
-
-        all_ids: set = set()
-        all_svc = []
-        for s in svc_list + svc_created:
-            sid = str(s["_id"])
-            if sid not in all_ids:
-                all_ids.add(sid)
-                all_svc.append(s)
 
         status_count: dict = {}
         for s in all_svc:
@@ -152,6 +146,7 @@ async def get_karyawan_stats(
         trend2: dict = {}
         for s in all_svc:
             if s.get("status") in ("Selesai", "Approved"):
+                # Pakai updated_at jika ada, fallback ke created_at
                 waktu = s.get("updated_at") or s.get("created_at")
                 if waktu:
                     day = waktu.strftime("%Y-%m-%d")

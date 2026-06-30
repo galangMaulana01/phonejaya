@@ -2,6 +2,7 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from enum import Enum
 from datetime import datetime
+import re
 
 
 class SparepartItem(BaseModel):
@@ -52,6 +53,13 @@ class UnitCreateRequest(BaseModel):
         if not v.strip():
             raise ValueError("Tidak boleh kosong")
         return v.strip()
+    @field_validator("imei")
+    @classmethod
+    def imei_format(cls, v: str) -> str:
+        if v and v != "-" and not re.match(r'^\d{14,16}$', v):
+            raise ValueError("IMEI harus 14-16 digit angka")
+        return v
+
 
 
 class ApproveRepairRequest(BaseModel):
@@ -95,3 +103,4 @@ class UnitResponse(BaseModel):
     tgl_masuk:     str = ""
     tgl_terjual:   Optional[str] = None
     service_id:    Optional[str] = None
+    created_by:    str = ""

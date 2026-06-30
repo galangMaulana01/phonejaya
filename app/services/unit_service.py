@@ -75,7 +75,11 @@ async def create_unit(
     """
     # Cek IMEI duplikat
     if payload.imei and payload.imei != "-":
-        existing = await db.units.find_one({"imei": payload.imei, "status": {"$ne": "Sold"}})
+        # Cek IMEI duplikat kecuali unit yang sudah Sold atau Ditolak
+        existing = await db.units.find_one({
+            "imei": payload.imei,
+            "status": {"$nin": ["Sold", "Ditolak"]}
+        })
         if existing:
             raise HTTPException(
                 status_code=409,

@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorDatabase
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 async def write_log(db: AsyncIOMotorDatabase, user: str, aksi: str, detail: str, cabang: str = "") -> None:
@@ -10,4 +13,4 @@ async def write_log(db: AsyncIOMotorDatabase, user: str, aksi: str, detail: str,
             "detail": detail, "cabang": cabang,
         })
     except Exception:
-        pass
+        logger.exception("Gagal menulis log: user=%s aksi=%s", user, aksi)

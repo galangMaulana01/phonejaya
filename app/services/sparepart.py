@@ -121,10 +121,12 @@ async def kurangi_stok_batch(
         sp = await db.sparepart.find_one({"sp_id": item["sp_id"]})
         if not sp:
             continue  # skip kalau sparepart sudah dihapus
-        stok_baru = max(0, sp["stok"] - item["jumlah"])
+        # Hitung aktual yang bisa dikurangi (tidak boleh minus)
+        actual_deducted = min(sp["stok"], item["jumlah"])
+        stok_baru = sp["stok"] - actual_deducted
         await db.sparepart.update_one(
             {"sp_id": item["sp_id"]},
             {"$set": {"stok": stok_baru, "updated_at": datetime.now(timezone.utc)}}
         )
         await write_log(db, actor, "Pemakaian Sparepart Service",
-            f"{item['sp_id']} • {sp['nama']} -{item['jumlah']} → stok:{stok_baru}", cabang)
+            f"{item['sp_id']} • {sp['nama']} -{actual_deducted} (diminta {item['jumlah']}) → stok:{stok_baru}", cabang)

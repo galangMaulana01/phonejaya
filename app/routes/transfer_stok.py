@@ -104,7 +104,7 @@ async def list_cabang_for_transfer(
     jadi endpoint ini sebagai alternatif yang aman.
     """
     docs = await db.cabang.find({"aktif": {"$ne": False}}).to_list(length=None)
-    return ok([{"kode": d["kode"], "nama": d.get("nama", "")} for d in docs])
+    return ok([{"kode": d["kode"], "nama": d.get("nama", d["kode"])} for d in docs])
 
 
 # ── Notifikasi polling endpoint ───────────────────────────────────────────────

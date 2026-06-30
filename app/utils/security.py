@@ -38,6 +38,13 @@ def decode_token(token: str) -> Optional[dict]:
     try:
         return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
     except ExpiredSignatureError:
-        return None   # Frontend akan handle 401 → redirect login
+        # Return payload dengan flag expired agar frontend bisa unterscheiden
+        try:
+            # Decode tanpa verify expiry untuk ambil payload
+            payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM], options={"verify_exp": False})
+            payload["_expired"] = True
+            return payload
+        except JWTError:
+            return None
     except JWTError:
         return None

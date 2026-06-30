@@ -1,13 +1,14 @@
-from datetime import datetime, timezone
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
+from datetime import datetime, timezone
 from app.schemas.transaksi import (
     TransaksiCreateRequest, TransaksiSparepartRequest, TransaksiResponse
 )
 from app.utils.id_generator import next_trx_id
 from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
+from app.services.customer_service import create_customer
 
 
 def _fmt(doc: dict) -> TransaksiResponse:
@@ -60,6 +61,28 @@ async def create_transaksi(
         {"$set": {"status": "Sold", "tgl_terjual": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}}
     )
 
+    # Auto-create customer jika nama diisi
+    customer_id = None
+    if payload.customer_nama and payload.customer_nama.strip():
+        # Cek apakah customer sudah ada (by nama + kontak atau nama saja)
+        existing_customer = await db.customers.find_one({
+            "nama": payload.customer_nama.strip(),
+            "cabang": cabang
+        })
+        if existing_customer:
+            customer_id = str(existing_customer["_id"])
+        else:
+            # Create new customer
+            new_customer = await create_customer(db, 
+                __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
+                    nama=payload.customer_nama.strip(),
+                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
+                    cabang=cabang
+                ),
+                actor=kasir_name
+            )
+            customer_id = new_customer.id
+
     trx_id = await next_trx_id(db)
     biaya_garansi = payload.biaya_garansi
     profit = unit["harga_jual"] + biaya_garansi - unit["harga_modal"]
@@ -80,6 +103,9 @@ async def create_transaksi(
         "waktu":       now,
         "catatan":     payload.catatan,
         "cabang":      cabang,
+        "customer_nama":  payload.customer_nama.strip() if payload.customer_nama else "",
+        "customer_kontak": payload.customer_kontak.strip() if payload.customer_kontak else "",
+        "customer_id":    customer_id,
     }
     result = await db.transaksi.insert_one(doc)
     doc["_id"] = result.inserted_id

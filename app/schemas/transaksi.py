@@ -9,6 +9,8 @@ class TransaksiCreateRequest(BaseModel):
     catatan:       str = ""
     garansi_hari:  int = 7     # 7 atau 30
     biaya_garansi: int = 0     # 0 atau 100000
+    customer_nama: str = ""    # nama pembeli (optional - jika baru akan auto-create)
+    customer_kontak: str = ""  # kontak pembeli (optional)
 
 
 class TransaksiSparepartItem(BaseModel):

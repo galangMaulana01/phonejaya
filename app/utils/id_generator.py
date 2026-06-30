@@ -20,7 +20,8 @@ async def _next_seq(db: AsyncIOMotorDatabase, key: str) -> int:
 
 
 async def next_unit_id(db, kat: str, kondisi: str, cabang: str = "JYP") -> str:
-    seq = await _next_seq(db, kat)
+    # Counter per (cabang, kategori) agar tidak tabrakan antar cabang
+    seq = await _next_seq(db, f"{cabang}-{kat}")
     return f"{cabang}-{kat}-{kondisi}-{str(seq).zfill(3)}"
 
 
@@ -42,3 +43,18 @@ def resolve_kategori(kat_kode: str) -> str:
 
 def resolve_kondisi(kondisi_kode: str) -> str:
     return _KONDISI_MAP.get(kondisi_kode, kondisi_kode)
+
+
+def _parse_kode(unit_id: str) -> tuple[str, str]:
+    """
+    Ekstrak kat_kode dan kondisi_kode dari unit_id.
+    Format: {CABANG}-{KAT}-{KONDISI}-{SEQ}
+    Contoh: JYP-IP-BN-001 → ('IP', 'BN')
+    """
+    parts = unit_id.split("-")
+    if len(parts) < 4:
+        raise ValueError(f"Format unit_id tidak valid: {unit_id}")
+    # parts[0] = cabang, parts[1] = kat, parts[2] = kondisi, parts[-1] = seq
+    kat_kode = parts[1]
+    kondisi_kode = parts[2]
+    return kat_kode, kondisi_kode
