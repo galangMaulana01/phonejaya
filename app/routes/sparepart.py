@@ -42,5 +42,5 @@ async def update_stok(
     db:    AsyncIOMotorDatabase = Depends(get_db),
     user:  dict = Depends(require_kepala_or_owner),
 ):
-    sp = await sparepart_service.update_stok(db, sp_id=sp_id, payload=body, actor=user.get("name", user.get("username", "")))
+    sp = await sparepart_service.update_stok(db, sp_id=sp_id, payload=body, actor=user.get("name", user.get("username", "")), user_role=user.get('role',''), user_cabang=user.get('cabang',''))
     return ok(sp.model_dump(), message="Stok berhasil diupdate")

@@ -28,7 +28,11 @@ async def list_units(
 ):
     cab = _cabang_filter(user, cabang)
     units = await unit_service.list_units(db, cabang=cab, status_filter=status, limit=limit)
-    return ok([u.model_dump() for u in units])
+    result = [u.model_dump() for u in units]
+    if user.get('role') == 'teknisi':
+        for item in result:
+            item.pop('harga_modal', None)
+    return ok(result)
 
 
 @router.post("", status_code=201)

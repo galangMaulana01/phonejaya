@@ -47,19 +47,26 @@ async def create_transaksi(
     db, payload: TransaksiCreateRequest, kasir_name: str, cabang: str
 ) -> TransaksiResponse:
     """Jual HP."""
-    unit = await db.units.find_one({"unit_id": payload.unit_id})
+    # Atomic check-and-lock: only matches if status is still "Tersedia"
+    unit = await db.units.find_one_and_update(
+        {"unit_id": payload.unit_id, "status": "Tersedia"},
+        {"$set": {"status": "Sold", "tgl_terjual": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},
+        return_document=False,
+    )
     if not unit:
-        raise HTTPException(status_code=404, detail="Unit tidak ditemukan")
-    if unit["status"] != "Tersedia":
-        raise HTTPException(status_code=409, detail=f"Unit tidak tersedia (status: {unit['status']})")
+        existing = await db.units.find_one({"unit_id": payload.unit_id})
+        if not existing:
+            raise HTTPException(status_code=404, detail="Unit tidak ditemukan")
+        raise HTTPException(status_code=409, detail=f"Unit tidak tersedia (status: {existing['status']})")
+
+    # Post-lock validation — rollback (Tersedia) if checks fail
+    if unit.get("cabang") != cabang:
+        await db.units.update_one({"unit_id": payload.unit_id}, {"$set": {"status": "Tersedia"}})
+        raise HTTPException(status_code=403, detail="Unit bukan milik cabang kamu")
     if unit.get("imei") and unit["imei"] != "-":
         if payload.imei.strip() != unit["imei"]:
+            await db.units.update_one({"unit_id": payload.unit_id}, {"$set": {"status": "Tersedia"}})
             raise HTTPException(status_code=422, detail="IMEI tidak sesuai. Periksa kembali.")
-
-    await db.units.update_one(
-        {"unit_id": payload.unit_id},
-        {"$set": {"status": "Sold", "tgl_terjual": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}}
-    )
 
     # Auto-create customer jika nama diisi
     customer_id = None
@@ -133,6 +140,8 @@ async def create_transaksi_sparepart(
                 status_code=400,
                 detail=f"Stok {sp['nama']} tidak cukup. Tersedia: {sp['stok']}, diminta: {item.jumlah}"
             )
+        if sp.get("cabang") != cabang:
+            raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
         total_jual  += sp["harga_jual"]  * item.jumlah
         total_modal += sp["harga_beli"]  * item.jumlah
         labels.append(f"{sp['nama']} x{item.jumlah}")

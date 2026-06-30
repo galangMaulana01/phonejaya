@@ -39,5 +39,5 @@ async def respon_request(
     db:     AsyncIOMotorDatabase = Depends(get_db),
     user:   dict = Depends(require_kepala_or_owner),
 ):
-    item = await respond_request(db, req_id=req_id, payload=body, actor=user.get("name", user.get("username","")))
+    item = await respond_request(db, req_id=req_id, payload=body, actor=user.get("name", user.get("username","")), actor_role=user.get('role',''), actor_cabang=user.get('cabang',''))
     return ok(item.model_dump(), message=f"Request {req_id} {item.status}")

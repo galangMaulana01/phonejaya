@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -12,7 +12,7 @@ from app.services.transfer_stok_service import (
     count_pending_for_cabang,
     list_pending_for_cabang,
 )
-from app.middlewares.auth import require_kepala_or_owner, require_any
+from app.middlewares.auth import require_kepala_or_owner, require_any, require_kepala_cabang_only
 
 router = APIRouter(prefix="/transfer-stok", tags=["Transfer Stok"])
 
@@ -41,21 +41,16 @@ async def get_transfers(
 @router.post("", status_code=201)
 async def buat_transfer(
     body: TransferStokCreateRequest,
-    db:   AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kepala_or_owner),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kepala_cabang_only),
 ):
     """
     Buat transfer baru.
     - Hanya kepala_cabang yang bisa (owner tidak, karena owner tidak punya cabang tertentu).
     - Body: cabang_tujuan, unit_ids (list), catatan (opsional).
     """
-    if user.get("role") != "kepala_cabang":
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Hanya Kepala Cabang yang bisa membuat transfer stok")
-
     cabang_asal = user.get("cabang")
     if not cabang_asal:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Akun kamu tidak terhubung ke cabang manapun")
 
     item = await create_transfer(

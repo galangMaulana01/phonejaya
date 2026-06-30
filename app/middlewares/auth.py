@@ -41,3 +41,10 @@ def require_teknisi_or_owner(current_user: dict = Depends(get_current_user)) -> 
 
 def require_any(current_user: dict = Depends(get_current_user)) -> dict:
     return current_user
+
+
+def require_kepala_cabang_only(current_user: dict = Depends(get_current_user)) -> dict:
+    """Hanya Kepala Cabang yang bisa akses. Owner TIDAK diizinkan."""
+    if current_user.get("role") != "kepala_cabang":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hanya Kepala Cabang yang diizinkan")
+    return current_user

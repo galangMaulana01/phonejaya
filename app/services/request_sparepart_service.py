@@ -55,10 +55,12 @@ async def create_request(db, payload: RequestSparepartCreateRequest, actor: str)
     return _fmt(doc)
 
 
-async def respond_request(db, req_id: str, payload: RequestSparepartResponseRequest, actor: str) -> RequestSparepartResponse:
+async def respond_request(db, req_id: str, payload: RequestSparepartResponseRequest, actor: str, actor_role: str = '', actor_cabang: str = '') -> RequestSparepartResponse:
     doc = await db.request_sparepart.find_one({"req_id": req_id})
     if not doc: raise HTTPException(404, f"Request {req_id} tidak ditemukan")
     if doc["status"] != "Pending": raise HTTPException(400, "Request sudah direspon")
+    if actor_role == 'kepala_cabang' and doc.get('cabang') != actor_cabang:
+        raise HTTPException(status_code=403, detail='Kamu tidak bisa respon request cabang lain')
 
     now    = datetime.now(timezone.utc)
     update = {"status": payload.status.value, "catatan_kc": payload.catatan, "updated_at": now}

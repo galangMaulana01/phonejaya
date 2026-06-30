@@ -34,6 +34,8 @@ async def tambah_karyawan(
     db:   AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kepala_or_owner),
 ):
+    if user.get('role') == 'kepala_cabang':
+        body.cabang = user.get('cabang', body.cabang)
     kar = await karyawan_service.create_karyawan(
         db, payload=body,
         actor=user.get("name", user.get("username", "")),

@@ -149,21 +149,27 @@ async def update_service(
     )
     return _fmt(updated)
 
-
-async def add_foto_url(
+async def update_service(
     db,
     service_id: str,
-    url: str,
+    body: ServiceUpdateRequest,
     actor: str,
+    actor_role: str,
+    user_cabang: str,
 ) -> ServiceResponse:
     doc = await db.service.find_one({"service_id": service_id})
     if not doc:
         raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
 
+    # Non-owner hanya bisa update service milik cabangnya sendiri
+    if actor_role != "owner":
+        if doc.get("cabang") != user_cabang:
+            raise HTTPException(status_code=403, detail="Bukan hak anda untuk update service ini")
+
     if doc.get("status") in ("Approved", "Ditolak"):
         raise HTTPException(
             status_code=400,
-            detail="Tidak bisa upload foto untuk tiket yang sudah selesai."
+            detail="Tidak bisa update status untuk tiket yang sudah selesai atau ditolak.",
         )
 
     await db.service.update_one(

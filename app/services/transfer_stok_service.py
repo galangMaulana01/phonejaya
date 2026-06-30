@@ -162,6 +162,23 @@ async def create_transfer(
     transfer_id = await _next_transfer_id(db)
     now = datetime.now(timezone.utc)
 
+    # Atomic soft-lock: mark all valid units as Dalam Transfer
+    # This closes the race window between validation and insert.
+    lock_result = await db.units.update_many(
+        {"unit_id": {"$in": unit_ids_clean}, "status": "Tersedia"},
+        {"$set": {"status": "Dalam Transfer", "updated_at": now}}
+    )
+    if lock_result.modified_count != len(unit_ids_clean):
+        # Some units were grabbed by another operation — rollback and fail
+        await db.units.update_many(
+            {"unit_id": {"$in": unit_ids_clean}, "status": "Dalam Transfer"},
+            {"$set": {"status": "Tersedia"}}
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Satu atau lebih unit sudah tidak tersedia, silakan coba lagi"
+        )
+
     doc = {
         "transfer_id":   transfer_id,
         "cabang_asal":   cabang_asal,
@@ -281,12 +298,13 @@ async def _proses_terima(
 
         unit_id_baru = await next_unit_id(db, kat_kode, kondisi_kode, cabang_tujuan)
 
-        # Update unit document
+        # Update unit document: reassign ID + cabang, clear soft-lock status to Tersedia
         await db.units.update_one(
             {"unit_id": unit_id_asal},
             {"$set": {
                 "unit_id":    unit_id_baru,
                 "cabang":     cabang_tujuan,
+                "status":     "Tersedia",
                 "updated_at": now,
             }}
         )
@@ -335,11 +353,18 @@ async def _proses_tolak(
     catatan: str,
     now: datetime,
 ) -> None:
-    """Tolak — unit tidak dipindah, cukup log."""
+    """Tolak — unit tidak dipindah, kembalikan status ke Tersedia dan log."""
     transfer_id   = doc["transfer_id"]
     cabang_asal   = doc["cabang_asal"]
     cabang_tujuan = doc["cabang_tujuan"]
     jumlah        = doc.get("jumlah", len(doc.get("units", [])))
+
+    # Kembalikan status unit ke Tersedia (dibatalkan dari soft-lock Dalam Transfer)
+    unit_id_asals = [u["unit_id_asal"] for u in doc.get("units", [])]
+    await db.units.update_many(
+        {"unit_id": {"$in": unit_id_asals}},
+        {"$set": {"status": "Tersedia", "updated_at": now}}
+    )
 
     await write_log(
         db, actor,

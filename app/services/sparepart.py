@@ -89,10 +89,14 @@ async def update_stok(
     sp_id: str,
     payload: SparepartUpdateStokRequest,
     actor: str,
+    user_role: str = '',
+    user_cabang: str = '',
 ) -> SparepartResponse:
     sp = await db.sparepart.find_one({"sp_id": sp_id})
     if not sp:
         raise HTTPException(status_code=404, detail=f"Sparepart {sp_id} tidak ditemukan")
+    if user_role == 'kepala_cabang' and sp.get('cabang') != user_cabang:
+        raise HTTPException(status_code=403, detail='Sparepart bukan milik cabangmu')
 
     stok_baru = sp["stok"] + payload.delta
     if stok_baru < 0:
