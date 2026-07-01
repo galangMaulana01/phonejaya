@@ -22,12 +22,13 @@ def _cabang_filter(user: dict, cabang_param: Optional[str]) -> Optional[str]:
 async def list_units(
     cabang: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    q:      Optional[str] = Query(None),
     limit:  int = Query(200, ge=1, le=500),
     db:     AsyncIOMotorDatabase = Depends(get_db),
     user:   dict = Depends(require_any),
 ):
     cab = _cabang_filter(user, cabang)
-    units = await unit_service.list_units(db, cabang=cab, status_filter=status, limit=limit)
+    units = await unit_service.list_units(db, cabang=cab, status_filter=status, q=q, limit=limit)
     result = [u.model_dump() for u in units]
     if user.get('role') == 'teknisi':
         for item in result:

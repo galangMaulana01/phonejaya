@@ -37,6 +37,8 @@ async def list_service(
     db,
     cabang: Optional[str] = None,
     status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     limit: int = 100,
 ) -> List[ServiceResponse]:
     query: dict = {}
@@ -44,6 +46,13 @@ async def list_service(
         query["cabang"] = cabang
     if status:
         query["status"] = status
+    if date_from or date_to:
+        wf: dict = {}
+        if date_from:
+            wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
+        if date_to:
+            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
+        query["created_at"] = wf
     docs = await db.service.find(query).sort("created_at", -1).limit(limit).to_list(length=limit)
     return [_fmt(d) for d in docs]
 

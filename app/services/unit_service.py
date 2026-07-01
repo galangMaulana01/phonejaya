@@ -51,6 +51,7 @@ async def list_units(
     db,
     cabang: Optional[str] = None,
     status_filter: Optional[str] = None,
+    q: Optional[str] = None,
     limit: int = 200,
 ) -> List[UnitResponse]:
     query: dict = {}
@@ -58,6 +59,14 @@ async def list_units(
         query["cabang"] = cabang
     if status_filter and status_filter != "Semua":
         query["status"] = status_filter
+    if q:
+        regex = {"$regex": q, "$options": "i"}
+        query["$or"] = [
+            {"merk": regex},
+            {"tipe": regex},
+            {"imei": regex},
+            {"unit_id": regex},
+        ]
     docs = await db.units.find(query).sort("_id", -1).to_list(length=limit)
     return [_fmt(d) for d in docs]
 

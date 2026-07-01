@@ -26,12 +26,14 @@ def _cabang_filter(user: dict, cabang_param: Optional[str]) -> Optional[str]:
 async def list_service(
     cabang: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to:   Optional[str] = Query(None),
     limit:  int = Query(100, ge=1, le=500),
     db:     AsyncIOMotorDatabase = Depends(get_db),
     user:   dict = Depends(require_any),
 ):
     cab = _cabang_filter(user, cabang)
-    items = await service_service.list_service(db, cabang=cab, status=status, limit=limit)
+    items = await service_service.list_service(db, cabang=cab, status=status, date_from=date_from, date_to=date_to, limit=limit)
     return ok([i.model_dump() for i in items])
 
 
