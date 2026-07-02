@@ -12,13 +12,11 @@ router = APIRouter(prefix="/customers", tags=["Customer"])
 
 @router.get("")
 async def list_customer(
-    cabang: Optional[str] = Query(None),
     q:      Optional[str] = Query(None),
     db:     AsyncIOMotorDatabase = Depends(get_db),
     _user:  dict = Depends(require_kasir_or_owner),
 ):
-    cab = cabang if _user.get("role") == "owner" else _user.get("cabang")
-    items = await customer_service.list_customer(db, cabang=cab, q=q)
+    items = await customer_service.list_customer(db, q=q)
     return ok([i.model_dump() for i in items])
 
 

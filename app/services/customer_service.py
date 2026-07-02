@@ -9,15 +9,14 @@ from app.services.log_service import write_log
 def _fmt(doc: dict) -> CustomerResponse:
     return CustomerResponse(
         id=str(doc["_id"]), nama=doc["nama"],
-        kontak=doc["kontak"], cabang=doc["cabang"],
+        kontak=doc["kontak"], cabang=doc.get("cabang", ""),
         created_at=fmt_waktu(doc["created_at"]),
         points=doc.get("points", 0),
     )
 
 
-async def list_customer(db, cabang: Optional[str]=None, q: Optional[str]=None) -> List[CustomerResponse]:
+async def list_customer(db, q: Optional[str]=None) -> List[CustomerResponse]:
     query: dict = {}
-    if cabang: query["cabang"] = cabang
     if q: query["$or"] = [{"nama":{"$regex":q,"$options":"i"}},{"kontak":{"$regex":q,"$options":"i"}}]
     docs = await db.customers.find(query).sort("nama", 1).to_list(length=None)
     return [_fmt(d) for d in docs]
@@ -26,7 +25,7 @@ async def list_customer(db, cabang: Optional[str]=None, q: Optional[str]=None) -
 async def create_customer(db, payload: CustomerCreateRequest, actor: str) -> CustomerResponse:
     doc = {
         "nama": payload.nama, "kontak": payload.kontak,
-        "cabang": payload.cabang, "created_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone.utc),
         "points": 0,
     }
     result = await db.customers.insert_one(doc)

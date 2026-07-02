@@ -5,7 +5,7 @@ from typing import Optional
 class CustomerCreateRequest(BaseModel):
     nama:   str
     kontak: str
-    cabang: str = "JYP"
+    cabang: str = ""
 
     @field_validator("nama")
     @classmethod

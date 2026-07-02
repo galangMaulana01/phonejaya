@@ -86,8 +86,7 @@ async def create_transaksi(
             new_customer = await create_customer(db, 
                 __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
                     nama=payload.customer_nama.strip(),
-                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
-                    cabang=cabang
+                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else ""
                 ),
                 actor=kasir_name
             )
