@@ -39,6 +39,7 @@ async def create_transaksi(
     return ok(trx.model_dump(), message=f"Transaksi {trx.trx_id} berhasil dicatat")
 
 
+# Legacy endpoint — tetap dipertahankan untuk backward compat
 @router.post("/sparepart", status_code=201)
 async def create_transaksi_sparepart(
     body: TransaksiSparepartRequest,
