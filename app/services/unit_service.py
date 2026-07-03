@@ -171,6 +171,7 @@ async def create_unit(
             "teknisi":          "",
             "foto_urls":        [],
             "cabang":           payload.cabang,
+            "sparepart_items":  [{"sp_id": s.sp_id, "jumlah": s.jumlah} for s in payload.sparepart_items] if payload.sparepart_items else [],
             "created_at":       now,
             "updated_at":       None,
             "created_by":       actor,
