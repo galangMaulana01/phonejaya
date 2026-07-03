@@ -69,6 +69,7 @@ async def update_service(
         db, service_id, body,
         actor=user.get("name", user.get("username", "")),
         actor_role=user.get("role", ""),
+        user_cabang=user.get("cabang", ""),
     )
     return ok(item.model_dump(), message="Service berhasil diupdate")
 

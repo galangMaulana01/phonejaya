@@ -43,3 +43,14 @@ class KaryawanResponse(BaseModel):
     gaji: int
     aktif: bool
     bergabung: str
+
+
+class ResetPasswordRequest(BaseModel):
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def password_ok(cls, v: str) -> str:
+        if len(v) < 6:
+            raise ValueError("Password minimal 6 karakter")
+        return v

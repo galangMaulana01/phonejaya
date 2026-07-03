@@ -5,7 +5,7 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.config.database import get_db
-from app.schemas.karyawan import KaryawanCreateRequest
+from app.schemas.karyawan import KaryawanCreateRequest, ResetPasswordRequest
 from app.schemas.common import ok
 from app.services import karyawan_service
 from app.middlewares.auth import require_owner, require_kepala_or_owner
@@ -41,6 +41,20 @@ async def tambah_karyawan(
         actor=user.get("name", user.get("username", "")),
     )
     return ok(kar.model_dump(), message=f"Karyawan {kar.nama} berhasil ditambahkan")
+
+
+@router.patch("/{karyawan_id}/password")
+async def reset_password_karyawan(
+    karyawan_id: str,
+    body:    ResetPasswordRequest,
+    db:      AsyncIOMotorDatabase = Depends(get_db),
+    user:    dict = Depends(require_owner),
+):
+    result = await karyawan_service.reset_password(
+        db, karyawan_id=karyawan_id, new_password=body.password,
+        actor=user.get("name", user.get("username", "")),
+    )
+    return ok(result, message=f"Password {result['nama']} berhasil direset")
 
 
 @router.get("/{karyawan_id}/stats")
