@@ -269,7 +269,12 @@ async def update_video_metrics(
 
 async def get_profile(db: AsyncIOMotorDatabase, influencer_id: str) -> InfluencerProfileResponse:
     """Ambil profil influencer dari users collection."""
-    user = await db.users.find_one({"username": influencer_id})
+    from bson import ObjectId
+    # influencer_id dari JWT "sub" adalah ObjectId string, cari pakai _id
+    try:
+        user = await db.users.find_one({"_id": ObjectId(influencer_id)})
+    except Exception:
+        user = None
     if not user:
         raise HTTPException(status_code=404, detail="Influencer tidak ditemukan")
     return InfluencerProfileResponse(
@@ -303,10 +308,14 @@ async def update_profile(
 
     if update_data:
         update_data["updated_at"] = datetime.now(timezone.utc)
-        await db.users.update_one(
-            {"username": influencer_id},
-            {"$set": update_data}
-        )
+        # influencer_id dari JWT "sub" adalah ObjectId string, cari pakai _id
+        try:
+            await db.users.update_one(
+                {"_id": ObjectId(influencer_id)},
+                {"$set": update_data}
+            )
+        except Exception:
+            pass
         await write_log(db, actor, "Update Profil Influencer", f"{influencer_id}", "")
 
     return await get_profile(db, influencer_id)
