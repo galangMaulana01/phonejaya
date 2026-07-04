@@ -53,6 +53,7 @@ async def create_karyawan(db, payload: KaryawanCreateRequest, actor: str) -> Kar
         "Teknisi": "teknisi",
         "Owner":   "owner",
         "Admin":   "owner",
+        "Influencer": "influencer",
     }
     role = role_map.get(payload.jabatan, "kasir")
     await db.users.insert_one({

@@ -45,6 +45,15 @@ def resolve_kondisi(kondisi_kode: str) -> str:
     return _KONDISI_MAP.get(kondisi_kode, kondisi_kode)
 
 
+async def next_video_id(db: AsyncIOMotorDatabase, cabang: str) -> str:
+    """
+    Generate video ID: {CABANG}-VID-{SEQ}
+    Counter per cabang.
+    """
+    seq = await _next_seq(db, f"{cabang}-VID")
+    return f"{cabang}-VID-{str(seq).zfill(3)}"
+
+
 def _parse_kode(unit_id: str) -> tuple[str, str]:
     """
     Ekstrak kat_kode dan kondisi_kode dari unit_id.

@@ -48,3 +48,17 @@ def require_kepala_cabang_only(current_user: dict = Depends(get_current_user)) -
     if current_user.get("role") != "kepala_cabang":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hanya Kepala Cabang yang diizinkan")
     return current_user
+
+
+def require_influencer(current_user: dict = Depends(get_current_user)) -> dict:
+    """Hanya Influencer yang bisa akses."""
+    if current_user.get("role") != "influencer":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hanya Influencer yang diizinkan")
+    return current_user
+
+
+def require_influencer_or_owner(current_user: dict = Depends(get_current_user)) -> dict:
+    """Influencer atau Owner bisa akses."""
+    if current_user.get("role") not in ("owner", "influencer"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
+    return current_user
