@@ -13,6 +13,7 @@ from app.schemas.influencer import (
 from app.utils.id_generator import next_video_id
 from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
+from app.services.tiktok_service import fetch_video_metrics, TikTokAPIError
 
 
 def _fmt_video(doc: dict) -> VideoResponse:
@@ -35,9 +36,9 @@ def _fmt_video(doc: dict) -> VideoResponse:
     )
 
 
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 # INFLUENCER SERVICE (untuk influencer sendiri)
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 
 async def get_dashboard_stats(
     db: AsyncIOMotorDatabase,
@@ -150,7 +151,7 @@ async def create_video(
     cabang: str,
     actor: str
 ) -> VideoResponse:
-    """Buat video baru untuk unit. Validasi: unit ada, status Tersedia, cabang match, belum ada video untuk unit ini."""
+    """Buat video baru untuk unit. Auto-fetch metrics dari TikTok API jika platform TikTok."""
     # Cek unit
     unit = await db.units.find_one({"unit_id": payload.unit_id, "cabang": cabang, "status": "Tersedia"})
     if not unit:
@@ -166,11 +167,35 @@ async def create_video(
 
     video_id = await next_video_id(db, cabang)
     now = datetime.now(timezone.utc)
-    uploaded_at = payload.uploaded_at or now
+    uploaded_at = now  # default now, bisa di-override nanti
 
     unit_label = f"{unit['merk']} {unit['tipe']} {unit['storage']}"
     if unit.get("ram") and unit["ram"] != "-":
         unit_label += f" {unit['ram']}"
+
+    # Default metrics
+    views = likes = comments = shares = 0
+    author_username = ""
+    author_nickname = ""
+
+    # Auto-fetch metrics jika TikTok
+    if payload.platform.value == "tiktok":
+        try:
+            metrics = await fetch_video_metrics(str(payload.url))
+            views = metrics.get("views", 0)
+            likes = metrics.get("likes", 0)
+            comments = metrics.get("comments", 0)
+            shares = metrics.get("shares", 0)
+            author_username = metrics.get("author_username", "")
+            author_nickname = metrics.get("author_nickname", "")
+        except TikTokAPIError as e:
+            # Log error tapi tetap buat video dengan metrics 0
+            # User bisa update manual nanti
+            await write_log(
+                db, actor, "TikTok Auto-Fetch Failed",
+                f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
+                cabang
+            )
 
     doc = {
         "video_id": video_id,
@@ -181,10 +206,12 @@ async def create_video(
         "unit_label": unit_label,
         "platform": payload.platform.value,
         "url": payload.url,
-        "views": 0,
-        "likes": 0,
-        "comments": 0,
-        "shares": 0,
+        "views": views,
+        "likes": likes,
+        "comments": comments,
+        "shares": shares,
+        "author_username": author_username,
+        "author_nickname": author_nickname,
         "uploaded_at": uploaded_at,
         "updated_at": now,
         "created_at": now,
@@ -195,7 +222,7 @@ async def create_video(
 
     await write_log(
         db, actor, "Buat Video Influencer",
-        f"{video_id} → {unit_label} ({payload.platform.value})",
+        f"{video_id} → {unit_label} ({payload.platform.value})" + (f" [auto-fetched: {views} views]" if views else " [manual]"),
         cabang
     )
 
@@ -268,9 +295,7 @@ async def update_video_metrics(
 
 
 async def get_profile(db: AsyncIOMotorDatabase, influencer_id: str) -> InfluencerProfileResponse:
-    """Ambil profil influencer dari users collection."""
-    from bson import ObjectId
-    # influencer_id dari JWT "sub" adalah ObjectId string, cari pakai _id
+    """Ambil profil influencer dari users collection (basic info only)."""
     try:
         user = await db.users.find_one({"_id": ObjectId(influencer_id)})
     except Exception:
@@ -282,48 +307,12 @@ async def get_profile(db: AsyncIOMotorDatabase, influencer_id: str) -> Influence
         name=user.get("name", ""),
         username=user.get("username", ""),
         cabang=user.get("cabang", ""),
-        tiktok_url=user.get("tiktok_url"),
-        instagram_url=user.get("instagram_url"),
-        youtube_url=user.get("youtube_url"),
-        bio=user.get("bio"),
     )
 
 
-async def update_profile(
-    db: AsyncIOMotorDatabase,
-    influencer_id: str,
-    payload,
-    actor: str
-) -> InfluencerProfileResponse:
-    """Update profil influencer (social links, bio)."""
-    update_data = {}
-    if payload.tiktok_url is not None:
-        update_data["tiktok_url"] = payload.tiktok_url
-    if payload.instagram_url is not None:
-        update_data["instagram_url"] = payload.instagram_url
-    if payload.youtube_url is not None:
-        update_data["youtube_url"] = payload.youtube_url
-    if payload.bio is not None:
-        update_data["bio"] = payload.bio
-
-    if update_data:
-        update_data["updated_at"] = datetime.now(timezone.utc)
-        # influencer_id dari JWT "sub" adalah ObjectId string, cari pakai _id
-        try:
-            await db.users.update_one(
-                {"_id": ObjectId(influencer_id)},
-                {"$set": update_data}
-            )
-        except Exception:
-            pass
-        await write_log(db, actor, "Update Profil Influencer", f"{influencer_id}", "")
-
-    return await get_profile(db, influencer_id)
-
-
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 # OWNER INFLUENCER MONITOR SERVICE
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 
 async def get_owner_dashboard(db: AsyncIOMotorDatabase) -> OwnerInfluencerDashboard:
     """Dashboard owner: agregat semua influencer."""

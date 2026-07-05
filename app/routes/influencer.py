@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 from app.config.database import get_db
 from app.schemas.influencer import (
     VideoCreateRequest, VideoUpdateMetricsRequest,
-    InfluencerProfileUpdate,
     InfluencerDashboardStats, CatalogItem,
-    VideoResponse, InfluencerProfileResponse
+    VideoResponse, InfluencerProfileResponse,
+    OwnerInfluencerSummary, OwnerInfluencerDashboard
 )
 from app.schemas.common import ok
 from app.services import influencer_service
@@ -16,10 +16,9 @@ from app.middlewares.auth import require_influencer, require_influencer_or_owner
 
 router = APIRouter(prefix="/influencer", tags=["Influencer"])
 
-
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 # INFLUENCER ENDPOINTS
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 
 @router.get("/dashboard/stats", response_model=dict)
 async def dashboard_stats(
@@ -60,11 +59,11 @@ async def create_video(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_influencer),
 ):
-    """Buat video baru untuk unit."""
-    influencer_id = user.get("sub") or user.get("username")
-    influencer_name = user.get("name") or user.get("username")
-    cabang = user.get("cabang")
-    actor = user.get("name") or user.get("username")
+    """Buat video baru untuk unit. Auto-fetch metrics jika TikTok."""
+    influencer_id = user.get("sub") or user.get("username", "")
+    influencer_name = user.get("name") or user.get("username", "")
+    cabang = user.get("cabang", "")
+    actor = user.get("name") or user.get("username", "")
 
     if not influencer_id or not cabang:
         raise HTTPException(status_code=400, detail="Data influencer tidak lengkap")
@@ -104,8 +103,8 @@ async def update_video_metrics(
     user: dict = Depends(require_influencer),
 ):
     """Update metrics video (views, likes, comments, shares)."""
-    influencer_id = user.get("sub") or user.get("username")
-    actor = user.get("name") or user.get("username")
+    influencer_id = user.get("sub") or user.get("username", "")
+    actor = user.get("name") or user.get("username", "")
 
     video = await influencer_service.update_video_metrics(
         db, video_id, payload, influencer_id, actor
@@ -118,20 +117,51 @@ async def get_profile(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_influencer),
 ):
-    """Profil influencer."""
-    influencer_id = user.get("sub") or user.get("username")
+    """Profil influencer (basic info only)."""
+    influencer_id = user.get("sub") or user.get("username", "")
     profile = await influencer_service.get_profile(db, influencer_id)
     return ok(profile.model_dump())
 
 
-@router.patch("/profile", response_model=dict)
-async def update_profile(
-    payload: InfluencerProfileUpdate,
+# ════════════════════════════════════════════════════════════════
+# OWNER INFLUENCER MONITOR ENDPOINTS
+# ════════════════════════════════════════════════════════════════
+
+from app.middlewares.auth import require_owner
+
+@router.get("/owner/dashboard", response_model=dict)
+async def owner_dashboard(
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_influencer),
+    user: dict = Depends(require_owner),
 ):
-    """Update profil influencer (social links, bio)."""
-    influencer_id = user.get("sub") or user.get("username")
-    actor = user.get("name") or user.get("username")
-    profile = await influencer_service.update_profile(db, influencer_id, payload, actor)
-    return ok(profile.model_dump(), message="Profil berhasil diupdate")
+    """Dashboard owner: agregat semua influencer."""
+    dashboard = await influencer_service.get_owner_dashboard(db)
+    return ok(dashboard.model_dump())
+
+
+@router.get("/owner/videos", response_model=dict)
+async def owner_list_videos(
+    cabang: Optional[str] = Query(None),
+    influencer_id: Optional[str] = Query(None),
+    platform: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_owner),
+):
+    """Owner lihat semua video dengan filter."""
+    items = await influencer_service.list_all_videos_owner(
+        db, cabang, influencer_id, platform, date_from, date_to, limit
+    )
+    return ok([item.model_dump() for item in items])
+
+
+@router.get("/owner/influencers", response_model=dict)
+async def owner_list_influencers(
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_owner),
+):
+    """List semua influencer untuk dropdown filter owner."""
+    items = await influencer_service.list_influencers(db)
+    return ok(items)

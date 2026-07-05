@@ -14,7 +14,6 @@ class VideoCreateRequest(BaseModel):
     unit_id: str
     platform: PlatformEnum
     url: HttpUrl
-    uploaded_at: Optional[datetime] = None  # Optional, defaults to now
 
     @field_validator("unit_id")
     @classmethod
@@ -35,7 +34,7 @@ class VideoUpdateMetricsRequest(BaseModel):
     comments: Optional[int] = None
     shares: Optional[int] = None
 
-    @field_validator("views", "likes", "comments", "comments", "shares", mode="before")
+    @field_validator("views", "likes", "comments", "shares", mode="before")
     @classmethod
     def non_negative(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and v < 0:
@@ -87,17 +86,6 @@ class InfluencerProfileResponse(BaseModel):
     name: str
     username: str
     cabang: str
-    tiktok_url: Optional[str] = None
-    instagram_url: Optional[str] = None
-    youtube_url: Optional[str] = None
-    bio: Optional[str] = None
-
-
-class InfluencerProfileUpdate(BaseModel):
-    tiktok_url: Optional[str] = None
-    instagram_url: Optional[str] = None
-    youtube_url: Optional[str] = None
-    bio: Optional[str] = None
 
 
 # Owner monitor schemas

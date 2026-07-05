@@ -12,12 +12,17 @@ class Settings(BaseSettings):
     MONGO_DB: str = "jayapona"
 
     # JWT
-    JWT_SECRET: str = "change-this-secret"
+    JWT_SECRET: str = "dev-secret-change-in-production"
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 1440  # 24 jam
+    JWT_EXPIRE_MINUTES: int = 480
 
     # CORS
     CORS_ORIGINS: str = "*"
+
+    # TikTok RapidAPI
+    TIKTOK_RAPIDAPI_KEY: str = ""
+    TIKTOK_RAPIDAPI_HOST: str = "free-tiktok-api-scraper-mobile-version.p.rapidapi.com"
+    TIKTOK_API_BASE_URL: str = "https://free-tiktok-api-scraper-mobile-version.p.rapidapi.com"
 
     @property
     def cors_origins_list(self) -> List[str]:
