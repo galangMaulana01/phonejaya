@@ -38,7 +38,7 @@ def extract_tiktok_video_id(url: str) -> Optional[str]:
 async def fetch_video_metrics(video_url: str) -> Dict[str, Any]:
     """
     Fetch video metrics from TikTok RapidAPI.
-    Returns: {views, likes, comments, shares, video_id, author_info}
+    Returns: {views, likes, comments, shares, video_id, author_username, author_nickname}
     """
     if not settings.TIKTOK_RAPIDAPI_KEY:
         raise TikTokAPIError("TikTok RapidAPI key not configured", 500)
@@ -57,6 +57,9 @@ async def fetch_video_metrics(video_url: str) -> Dict[str, Any]:
         f"{settings.TIKTOK_API_BASE_URL}/video/info?video_id={video_id}",
         f"{settings.TIKTOK_API_BASE_URL}/video/detail?video_id={video_id}",
         f"{settings.TIKTOK_API_BASE_URL}/api/video/info?video_id={video_id}",
+        f"{settings.TIKTOK_API_BASE_URL}/video?video_id={video_id}",
+        f"{settings.TIKTOK_API_BASE_URL}/video/data?video_id={video_id}",
+        f"{settings.TIKTOK_API_BASE_URL}/aweme/v1/aweme/detail/?aweme_id={video_id}",
     ]
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -65,7 +68,6 @@ async def fetch_video_metrics(video_url: str) -> Dict[str, Any]:
                 resp = await client.get(endpoint, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
-                    # Normalize response from different API formats
                     return _normalize_response(data, video_id)
                 elif resp.status_code == 404:
                     continue  # Try next endpoint
