@@ -87,6 +87,22 @@ class InfluencerProfileResponse(BaseModel):
     name: str
     username: str
     cabang: str
+    tiktok_username: Optional[str] = None
+    instagram_username: Optional[str] = None
+    facebook_page: Optional[str] = None
+
+
+class InfluencerSocialUpdate(BaseModel):
+    tiktok_username: Optional[str] = None
+    instagram_username: Optional[str] = None
+    facebook_page: Optional[str] = None
+
+    @field_validator("tiktok_username", "instagram_username", "facebook_page", mode="before")
+    @classmethod
+    def strip_if_string(cls, v):
+        if v is not None and isinstance(v, str):
+            return v.strip() or None
+        return v
 
 
 # Owner monitor schemas

@@ -8,7 +8,8 @@ from app.schemas.influencer import (
     VideoCreateRequest, VideoUpdateMetricsRequest,
     InfluencerDashboardStats, CatalogItem,
     VideoResponse, InfluencerProfileResponse,
-    OwnerInfluencerSummary, OwnerInfluencerDashboard
+    OwnerInfluencerSummary, OwnerInfluencerDashboard,
+    InfluencerSocialUpdate
 )
 from app.schemas.common import ok
 from app.services import influencer_service
@@ -117,10 +118,23 @@ async def get_profile(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_influencer),
 ):
-    """Profil influencer (basic info only)."""
+    """Profil influencer (basic info + social media)."""
     influencer_id = user.get("sub") or user.get("username", "")
     profile = await influencer_service.get_profile(db, influencer_id)
     return ok(profile.model_dump())
+
+
+@router.patch("/social", response_model=dict)
+async def update_social(
+    payload: InfluencerSocialUpdate,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_influencer),
+):
+    """Update social media usernames (TikTok, Instagram, Facebook)."""
+    influencer_id = user.get("sub") or user.get("username", "")
+    actor = user.get("name") or user.get("username", "")
+    profile = await influencer_service.update_influencer_social(db, influencer_id, payload, actor)
+    return ok(profile.model_dump(), message="Social media updated")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -165,3 +179,18 @@ async def owner_list_influencers(
     """List semua influencer untuk dropdown filter owner."""
     items = await influencer_service.list_influencers(db)
     return ok(items)
+
+
+# ════════════════════════════════════════════════════════════════
+# CRON SYNC ENDPOINT (dipanggil via cron tiap 1 jam)
+# ════════════════════════════════════════════════════════════════
+
+@router.post("/sync", response_model=dict)
+async def sync_influencers(
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_owner),  # Hanya owner bisa trigger manual
+):
+    """Manual trigger untuk sync semua influencer (dipakai cron tiap 1 jam)."""
+    from app.services.influencer_sync_service import sync_all_influencers
+    result = await sync_all_influencers(db)
+    return ok(result, message="Influencer sync completed")

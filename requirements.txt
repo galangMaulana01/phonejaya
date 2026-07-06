@@ -15,3 +15,5 @@ requests-html==0.10.0
 lxml_html_clean==0.4.5
 dateparser==1.4.1
 pyppeteer==2.0.0
+TikTokApi==5.2.1
+playwright==1.40.0

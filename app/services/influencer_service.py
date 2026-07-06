@@ -8,7 +8,8 @@ from app.schemas.influencer import (
     VideoCreateRequest, VideoUpdateMetricsRequest,
     VideoResponse, InfluencerDashboardStats,
     CatalogItem, InfluencerProfileResponse,
-    OwnerInfluencerSummary, OwnerInfluencerDashboard
+    OwnerInfluencerSummary, OwnerInfluencerDashboard,
+    InfluencerSocialUpdate
 )
 from app.utils.id_generator import next_video_id
 from app.utils.formatters import fmt_waktu
@@ -325,7 +326,7 @@ async def update_video_metrics(
 
 
 async def get_profile(db: AsyncIOMotorDatabase, influencer_id: str) -> InfluencerProfileResponse:
-    """Ambil profil influencer dari users collection (basic info only)."""
+    """Ambil profil influencer dari users collection (basic info + social media)."""
     try:
         user = await db.users.find_one({"_id": ObjectId(influencer_id)})
     except Exception:
@@ -337,6 +338,48 @@ async def get_profile(db: AsyncIOMotorDatabase, influencer_id: str) -> Influence
         name=user.get("name", ""),
         username=user.get("username", ""),
         cabang=user.get("cabang", ""),
+        tiktok_username=user.get("tiktok_username"),
+        instagram_username=user.get("instagram_username"),
+        facebook_page=user.get("facebook_page"),
+    )
+
+
+async def update_influencer_social(db: AsyncIOMotorDatabase, influencer_id: str, payload: InfluencerSocialUpdate, actor: str) -> InfluencerProfileResponse:
+    """Update social media usernames untuk influencer."""
+    try:
+        oid = ObjectId(influencer_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="ID influencer tidak valid")
+    
+    update_data = {}
+    if payload.tiktok_username is not None:
+        update_data["tiktok_username"] = payload.tiktok_username
+    if payload.instagram_username is not None:
+        update_data["instagram_username"] = payload.instagram_username
+    if payload.facebook_page is not None:
+        update_data["facebook_page"] = payload.facebook_page
+    
+    if not update_data:
+        raise HTTPException(status_code=422, detail="Tidak ada data yang diupdate")
+    
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    
+    await db.users.update_one({"_id": oid}, {"$set": update_data})
+    await write_log(
+        db, actor, "Update Influencer Social",
+        f"{influencer_id} → tiktok:{payload.tiktok_username} ig:{payload.instagram_username} fb:{payload.facebook_page}",
+        ""
+    )
+    
+    updated_user = await db.users.find_one({"_id": oid})
+    return InfluencerProfileResponse(
+        id=str(updated_user["_id"]),
+        name=updated_user.get("name", ""),
+        username=updated_user.get("username", ""),
+        cabang=updated_user.get("cabang", ""),
+        tiktok_username=updated_user.get("tiktok_username"),
+        instagram_username=updated_user.get("instagram_username"),
+        facebook_page=updated_user.get("facebook_page"),
     )
 
 
