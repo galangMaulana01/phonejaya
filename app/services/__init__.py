@@ -22,6 +22,7 @@ from app.services.influencer_service import (
     list_influencers,
 )
 from app.services.tiktok_service import fetch_video_metrics, extract_tiktok_video_id, TikTokAPIError
+from app.services.instagram_service import fetch_post_metrics, extract_instagram_shortcode, InstagramAPIError
 __all__ = [
     "login",
     "list_units", "create_unit", "approve_repair",

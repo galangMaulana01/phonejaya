@@ -13,7 +13,8 @@ from app.schemas.influencer import (
 from app.utils.id_generator import next_video_id
 from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
-from app.services.tiktok_service import fetch_video_metrics, TikTokAPIError
+from app.services.tiktok_service import fetch_video_metrics as fetch_tiktok_metrics, TikTokAPIError
+from app.services.instagram_service import fetch_post_metrics as fetch_instagram_metrics, InstagramAPIError
 
 
 def _fmt_video(doc: dict) -> VideoResponse:
@@ -178,10 +179,10 @@ async def create_video(
     author_username = ""
     author_nickname = ""
 
-    # Auto-fetch metrics jika TikTok
+    # Auto-fetch metrics berdasarkan platform
     if payload.platform.value == "tiktok":
         try:
-            metrics = await fetch_video_metrics(str(payload.url))
+            metrics = await fetch_tiktok_metrics(str(payload.url))
             views = metrics.get("views", 0)
             likes = metrics.get("likes", 0)
             comments = metrics.get("comments", 0)
@@ -189,10 +190,23 @@ async def create_video(
             author_username = metrics.get("author_username", "")
             author_nickname = metrics.get("author_nickname", "")
         except TikTokAPIError as e:
-            # Log error tapi tetap buat video dengan metrics 0
-            # User bisa update manual nanti
             await write_log(
                 db, actor, "TikTok Auto-Fetch Failed",
+                f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
+                cabang
+            )
+    elif payload.platform.value == "instagram":
+        try:
+            metrics = await fetch_instagram_metrics(str(payload.url))
+            views = metrics.get("views", 0)
+            likes = metrics.get("likes", 0)
+            comments = metrics.get("comments", 0)
+            shares = 0  # Instagram doesn't expose shares via public API
+            author_username = metrics.get("owner", {}).get("username", "")
+            author_nickname = metrics.get("owner", {}).get("full_name", "")
+        except InstagramAPIError as e:
+            await write_log(
+                db, actor, "Instagram Auto-Fetch Failed",
                 f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
                 cabang
             )
