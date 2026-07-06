@@ -7,6 +7,7 @@ from datetime import datetime
 class PlatformEnum(str, Enum):
     tiktok = "tiktok"
     instagram = "instagram"
+    facebook = "facebook"
     youtube = "youtube"
 
 

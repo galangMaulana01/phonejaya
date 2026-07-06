@@ -15,6 +15,7 @@ from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
 from app.services.tiktok_service import fetch_video_metrics as fetch_tiktok_metrics, TikTokAPIError
 from app.services.instagram_service import fetch_post_metrics as fetch_instagram_metrics, InstagramAPIError
+from app.services.facebook_service import fetch_post_metrics as fetch_facebook_metrics, FacebookAPIError
 
 
 def _fmt_video(doc: dict) -> VideoResponse:
@@ -207,6 +208,21 @@ async def create_video(
         except InstagramAPIError as e:
             await write_log(
                 db, actor, "Instagram Auto-Fetch Failed",
+                f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
+                cabang
+            )
+    elif payload.platform.value == "facebook":
+        try:
+            metrics = await fetch_facebook_metrics(str(payload.url))
+            views = metrics.get("views", 0)
+            likes = metrics.get("likes", 0)
+            comments = metrics.get("comments", 0)
+            shares = metrics.get("shares", 0)
+            author_username = metrics.get("page_name", "")
+            author_nickname = metrics.get("page_name", "")
+        except FacebookAPIError as e:
+            await write_log(
+                db, actor, "Facebook Auto-Fetch Failed",
                 f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
                 cabang
             )
