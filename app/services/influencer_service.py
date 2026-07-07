@@ -14,8 +14,11 @@ from app.schemas.influencer import (
 from app.utils.id_generator import next_video_id
 from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
-from app.services.tiktok_service import fetch_video_metrics as fetch_tiktok_metrics, TikTokAPIError
+# TikTok: Direct scraper (no RapidAPI)
+from app.services.tiktok_scraper import fetch_video_metrics as fetch_tiktok_metrics, TikTokScraperError
+# Instagram: Still using RapidAPI (TODO: migrate to direct scraper)
 from app.services.instagram_service import fetch_post_metrics as fetch_instagram_metrics, InstagramAPIError
+# Facebook: Using facebook-scraper library
 from app.services.facebook_service import fetch_post_metrics as fetch_facebook_metrics, FacebookAPIError
 
 
@@ -191,7 +194,13 @@ async def create_video(
             shares = metrics.get("shares", 0)
             author_username = metrics.get("author_username", "")
             author_nickname = metrics.get("author_nickname", "")
-        except TikTokAPIError as e:
+            await write_log(
+                db, actor, "TikTok Auto-Fetch Success",
+                f"{video_id} → {views} views, {likes} likes",
+                cabang
+            )
+        except TikTokScraperError as e:
+            # Log error, metrics stays 0 - will be retried by cron sync
             await write_log(
                 db, actor, "TikTok Auto-Fetch Failed",
                 f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
