@@ -1,9 +1,9 @@
 name: Influencer Auto-Sync (Hourly)
 
-on:
+"on":
   schedule:
-    - cron: '0 * * * *'  # Tiap jam jam 00 menit (UTC)
-  workflow_dispatch:     # Bisa trigger manual dari GitHub Actions UI
+    - cron: '0 * * * *'
+  workflow_dispatch: {}
 
 jobs:
   sync:
