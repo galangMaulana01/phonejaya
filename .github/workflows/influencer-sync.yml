@@ -1,0 +1,29 @@
+name: Influencer Auto-Sync (Hourly)
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Tiap jam jam 00 menit (UTC)
+  workflow_dispatch:     # Bisa trigger manual dari GitHub Actions UI
+
+jobs:
+  sync:
+    name: Sync Influencer Metrics
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call Vercel Cron Endpoint
+        run: |
+          echo "🕐 Starting influencer sync at $(date)"
+          curl -X POST "https://phonejaya.vercel.app/api/v1/influencer/sync/cron" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            --max-time 300 \
+            -v \
+            -w "\n\n📊 HTTP Status: %{http_code}\n⏱️  Total Time: %{time_total}s\n"
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+
+      - name: Log Result
+        if: always()
+        run: |
+          echo "✅ Sync job completed at $(date)"
