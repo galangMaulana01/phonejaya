@@ -12,9 +12,40 @@ Dioptimalkan untuk deployment di **Vercel** menggunakan Mangum.
 ## Role & Akses
 | Role | Akses |
 |------|-------|
-| **owner** | Semua fitur |
+| **owner** | Semua fitur + Monitor Influencer |
 | **kasir** | Stok, Transaksi, Tambah Unit, Customer |
 | **teknisi** | Data Service, Input & Update Service |
+| **influencer** | Dashboard, Katalog, Video, Profil Sosial |
+
+## Influencer Auto-Sync (Cron)
+Sistem memiliki fitur **auto-sync metrics video influencer** yang berjalan otomatis tiap jam via Vercel Cron.
+
+### Setup:
+1. **Tambah env var di Vercel:**
+   - `CRON_SECRET` = random string (generate: `openssl rand -hex 32`)
+   - `TIKTOK_MS_TOKEN` = ms_token dari cookie TikTok (wajib untuk TikTok scraper)
+
+2. **Vercel Cron sudah terkonfigurasi di `vercel.json`:**
+   - Endpoint: `POST /api/v1/influencer/sync/cron`
+   - Schedule: `0 * * * *` (tiap jam)
+   - Header required: `x-cron-secret: <CRON_SECRET>`
+
+3. **Influencer isi social username di halaman "Profil Sosial":**
+   - TikTok Username (tanpa @)
+   - Instagram Username (tanpa @)
+   - Facebook Page Name (contoh: `jayaphonestore`)
+
+4. **Cron akan:**
+   - Scrape feed TikTok (via TikTokApi + ms_token), Instagram (public endpoint), Facebook (facebook-scraper)
+   - Match video/post dengan unit via caption/keywords
+   - Update metrics otomatis (views, likes, comments, shares)
+   - Create video baru kalau belum ada di database
+
+### Manual Trigger (Owner):
+```bash
+curl -X POST https://backend.vercel.app/api/v1/influencer/sync \
+  -H "Authorization: Bearer <OWNER_TOKEN>"
+```
 
 ## Cara Deploy ke Vercel
 

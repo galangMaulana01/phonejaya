@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Header, status
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from datetime import datetime, timezone
+import os
 
 from app.config.database import get_db
 from app.schemas.influencer import (
-    VideoCreateRequest, VideoUpdateMetricsRequest,
+    VideoCreateRequest,
     InfluencerDashboardStats, CatalogItem,
     VideoResponse, InfluencerProfileResponse,
     OwnerInfluencerSummary, OwnerInfluencerDashboard,
@@ -96,23 +97,6 @@ async def list_videos(
     return ok([item.model_dump() for item in items])
 
 
-@router.patch("/videos/{video_id}", response_model=dict)
-async def update_video_metrics(
-    video_id: str,
-    payload: VideoUpdateMetricsRequest,
-    db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_influencer),
-):
-    """Update metrics video (views, likes, comments, shares)."""
-    influencer_id = user.get("sub") or user.get("username", "")
-    actor = user.get("name") or user.get("username", "")
-
-    video = await influencer_service.update_video_metrics(
-        db, video_id, payload, influencer_id, actor
-    )
-    return ok(video.model_dump(), message="Metrics video berhasil diupdate")
-
-
 @router.get("/profile", response_model=dict)
 async def get_profile(
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -185,6 +169,17 @@ async def owner_list_influencers(
 # CRON SYNC ENDPOINT (dipanggil via cron tiap 1 jam)
 # ════════════════════════════════════════════════════════════════
 
+from fastapi import Header, HTTPException, status
+from app.config.settings import settings
+
+
+async def verify_cron_secret(x_cron_secret: str = Header(...)):
+    """Verify cron secret for automated calls."""
+    cron_secret = getattr(settings, "CRON_SECRET", None) or os.getenv("CRON_SECRET")
+    if not cron_secret or x_cron_secret != cron_secret:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid cron secret")
+
+
 @router.post("/sync", response_model=dict)
 async def sync_influencers(
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -194,3 +189,14 @@ async def sync_influencers(
     from app.services.influencer_sync_service import sync_all_influencers
     result = await sync_all_influencers(db)
     return ok(result, message="Influencer sync completed")
+
+
+@router.post("/sync/cron", response_model=dict)
+async def sync_influencers_cron(
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    _: None = Depends(verify_cron_secret),
+):
+    """Cron endpoint untuk sync semua influencer (tiap jam via Vercel Cron)."""
+    from app.services.influencer_sync_service import sync_all_influencers
+    result = await sync_all_influencers(db)
+    return ok(result, message="Influencer cron sync completed")

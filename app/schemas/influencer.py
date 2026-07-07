@@ -29,20 +29,6 @@ class VideoCreateRequest(BaseModel):
         return str(v)
 
 
-class VideoUpdateMetricsRequest(BaseModel):
-    views: Optional[int] = None
-    likes: Optional[int] = None
-    comments: Optional[int] = None
-    shares: Optional[int] = None
-
-    @field_validator("views", "likes", "comments", "shares", mode="before")
-    @classmethod
-    def non_negative(cls, v: Optional[int]) -> Optional[int]:
-        if v is not None and v < 0:
-            raise ValueError("Harus >= 0")
-        return v
-
-
 class VideoResponse(BaseModel):
     id: str
     video_id: str

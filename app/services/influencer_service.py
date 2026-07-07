@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from bson import ObjectId
 
 from app.schemas.influencer import (
-    VideoCreateRequest, VideoUpdateMetricsRequest,
+    VideoCreateRequest,
     VideoResponse, InfluencerDashboardStats,
     CatalogItem, InfluencerProfileResponse,
     OwnerInfluencerSummary, OwnerInfluencerDashboard,
@@ -284,45 +284,6 @@ async def list_videos(
 
     docs = await db.influencer_videos.find(query).sort("uploaded_at", -1).limit(limit).to_list(length=limit)
     return [_fmt_video(d) for d in docs]
-
-
-async def update_video_metrics(
-    db: AsyncIOMotorDatabase,
-    video_id: str,
-    payload: VideoUpdateMetricsRequest,
-    influencer_id: str,
-    actor: str
-) -> VideoResponse:
-    """Update metrics video (views, likes, comments, shares). Hanya pemilik video."""
-    video = await db.influencer_videos.find_one({"video_id": video_id})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video tidak ditemukan")
-    if video["influencer_id"] != influencer_id:
-        raise HTTPException(status_code=403, detail="Bukan video Anda")
-
-    update_data = {"updated_at": datetime.now(timezone.utc)}
-    if payload.views is not None:
-        update_data["views"] = payload.views
-    if payload.likes is not None:
-        update_data["likes"] = payload.likes
-    if payload.comments is not None:
-        update_data["comments"] = payload.comments
-    if payload.shares is not None:
-        update_data["shares"] = payload.shares
-
-    await db.influencer_videos.update_one(
-        {"video_id": video_id},
-        {"$set": update_data}
-    )
-
-    await write_log(
-        db, actor, "Update Metrics Video",
-        f"{video_id} → views:{update_data.get('views', video['views'])} likes:{update_data.get('likes', video['likes'])}",
-        video["cabang"]
-    )
-
-    updated = await db.influencer_videos.find_one({"video_id": video_id})
-    return _fmt_video(updated)
 
 
 async def get_profile(db: AsyncIOMotorDatabase, influencer_id: str) -> InfluencerProfileResponse:
