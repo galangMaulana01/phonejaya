@@ -1,7 +1,32 @@
 """
 TikTok Direct Web Scraper - NO RapidAPI, NO cost.
-Uses TikTok public web API with msToken authentication.
+Uses TikTok's public web endpoints (hidden JSON + item_list API).
 Works on Vercel serverless (no browser/Playwright needed).
+
+ROOT-CAUSE FIX (2026-07-08):
+Previous version always returned views/likes/comments/shares = 0 because:
+  1. `/api/post/item_list/` was called with `secUid=""` and a `username` param.
+     That endpoint does NOT accept `username` — it only works with a real
+     `secUid`, which must be resolved from the profile page first. With an
+     empty secUid, TikTok returns HTTP 200 with `itemList: []` every time
+     (not an error), so the code silently fell through to a broken fallback.
+  2. The single-video fallback looked for a script tag with id
+     `__UNIVERSAL_DATA__`, which does not exist. The real tag is
+     `__UNIVERSAL_DATA_FOR_REHYDRATION__` (already used correctly elsewhere
+     in this file) - so that parsing path was dead code that never matched.
+  3. When every parsing method failed, the code returned a "successful"
+     TikTokVideo object with all stats hardcoded to 0 instead of raising an
+     error - masking real failures (blocked request, changed page structure,
+     private account, etc.) as if scraping had worked.
+
+This version:
+  - Resolves secUid from the profile page before calling item_list.
+  - Fixes the script-tag id bug.
+  - Parses video-detail pages via the confirmed-correct path:
+    __DEFAULT_SCOPE__ -> webapp.video-detail -> itemInfo -> itemStruct
+  - Raises TikTokScraperError with a specific reason instead of returning
+    a fake zeroed result, so failures are visible in logs and can actually
+    be diagnosed/fixed instead of hidden.
 """
 import os
 import re
@@ -34,402 +59,333 @@ class TikTokVideo:
     is_video: bool = True
 
 
+# Markers that indicate TikTok served a bot-check / interstitial page instead
+# of the real page. If we see these, we raise a clear error instead of
+# silently treating the (missing) data as "0".
+_CHALLENGE_MARKERS = (
+    "validate.tiktok.com",
+    "/captcha/",
+    "verify to continue",
+    "Please wait...",
+    "secsdk-captcha",
+)
+
+
 class TikTokDirectScraper:
     """
-    Direct TikTok scraper using public web API.
-    No browser automation - pure HTTP with msToken cookie.
+    Direct TikTok scraper using public web endpoints.
+    No browser automation - pure HTTP with msToken cookie + resolved secUid.
     """
-    
-    # TikTok web API endpoints
+
     BASE_URL = "https://www.tiktok.com"
-    API_ENDPOINT = "/api/post/item_list/"
-    
+    ITEM_LIST_ENDPOINT = "/api/post/item_list/"
+
     def __init__(self, ms_token: Optional[str] = None):
         self.ms_token = ms_token or os.getenv("TIKTOK_MS_TOKEN")
-        
-        if not self.ms_token:
-            raise TikTokScraperError(
-                "TIKTOK_MS_TOKEN not configured. Set in Vercel env vars or pass to constructor.",
-                500
-            )
-        
+
         self.client = httpx.AsyncClient(
             timeout=30.0,
+            http2=True,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
-                "Referer": self.BASE_URL,
+                "sec-ch-ua": '"Chromium";v="126", "Not.A/Brand";v="24"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+                "sec-fetch-site": "same-origin",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-dest": "document",
             },
             cookies={"msToken": self.ms_token} if self.ms_token else {},
-            follow_redirects=True
+            follow_redirects=True,
         )
-    
+        # secUid resolution is expensive (extra HTTP round trip), cache per instance
+        self._sec_uid_cache: Dict[str, str] = {}
+        self._bootstrapped = False
+
     async def __aenter__(self):
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.client.aclose()
-    
-    async def get_video_by_url(self, video_url: str) -> Optional[TikTokVideo]:
+
+    # ------------------------------------------------------------------
+    # Low-level helpers
+    # ------------------------------------------------------------------
+
+    async def _bootstrap_session(self) -> None:
         """
-        Fetch single video metrics from URL.
-        Supports: vt.tiktok.com, vm.tiktok.com, tiktok.com/@user/video/ID
+        Hit the TikTok homepage once so the client picks up baseline session
+        cookies (ttwid, tt_csrf_token, etc.) via Set-Cookie. httpx keeps
+        cookies on the client automatically across requests, so every
+        subsequent call in this scraper instance benefits from this.
         """
-        video_id = self._extract_video_id(video_url)
-        if not video_id:
-            raise TikTokScraperError(f"Invalid TikTok URL: {video_url}", 400)
-        
-        # Try to fetch from user feed (most reliable)
-        username = self._extract_username_from_url(video_url)
-        if username:
-            try:
-                videos = await self.get_user_feed(username, count=30)
-                for video in videos:
-                    if video.video_id == video_id:
-                        return video
-            except Exception:
-                pass
-        
-        # Fallback: try direct video info endpoint
+        if self._bootstrapped:
+            return
         try:
-            return await self._fetch_video_direct(video_id, video_url)
-        except Exception as e:
-            raise TikTokScraperError(f"Failed to fetch video {video_id}: {str(e)[:200]}", 502)
-    
-    async def get_user_feed(self, username: str, count: int = 30) -> List[TikTokVideo]:
+            await self.client.get(self.BASE_URL)
+        except Exception:
+            # Non-fatal - we still try the real request below
+            pass
+        self._bootstrapped = True
+
+    def _extract_rehydration_json(self, html: str) -> Optional[dict]:
+        """Extract and parse the __UNIVERSAL_DATA_FOR_REHYDRATION__ script tag."""
+        match = re.search(
+            r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        if not match:
+            return None
+        try:
+            return json.loads(match.group(1).strip())
+        except json.JSONDecodeError:
+            return None
+
+    def _is_challenge_page(self, html: str) -> bool:
+        lowered = html[:5000].lower()
+        return any(marker.lower() in lowered for marker in _CHALLENGE_MARKERS)
+
+    # ------------------------------------------------------------------
+    # secUid resolution (the actual fix for "always 0")
+    # ------------------------------------------------------------------
+
+    async def _resolve_sec_uid(self, username: str) -> str:
         """
-        Fetch latest videos from @username feed.
-        Uses TikTok public web API endpoint.
+        Resolve a username's secUid from their profile page. This is
+        required by /api/post/item_list/ - the endpoint does not accept
+        a username directly.
         """
         username = username.lstrip("@").strip()
-        
+        if username in self._sec_uid_cache:
+            return self._sec_uid_cache[username]
+
+        await self._bootstrap_session()
+
+        profile_url = f"{self.BASE_URL}/@{username}"
+        resp = await self.client.get(profile_url, headers={"Referer": self.BASE_URL})
+
+        if resp.status_code == 404:
+            raise TikTokScraperError(f"User @{username} not found", 404)
+        if resp.status_code != 200:
+            raise TikTokScraperError(
+                f"Failed to load profile @{username}: HTTP {resp.status_code}", resp.status_code
+            )
+
+        html = resp.text
+        if self._is_challenge_page(html):
+            raise TikTokScraperError(
+                f"TikTok served a verification/challenge page for @{username} "
+                "instead of the profile - request was flagged as bot traffic.",
+                403,
+            )
+
+        data = self._extract_rehydration_json(html)
+        if not data:
+            raise TikTokScraperError(
+                f"Could not find __UNIVERSAL_DATA_FOR_REHYDRATION__ on @{username}'s "
+                "profile page - TikTok page structure may have changed.",
+                502,
+            )
+
         try:
-            # Primary endpoint
+            user = (
+                data["__DEFAULT_SCOPE__"]["webapp.user-detail"]["userInfo"]["user"]
+            )
+            sec_uid = user.get("secUid")
+        except (KeyError, TypeError):
+            sec_uid = None
+
+        if not sec_uid:
+            raise TikTokScraperError(
+                f"secUid not found for @{username} - account may be private, "
+                "banned, or nonexistent.",
+                404,
+            )
+
+        self._sec_uid_cache[username] = sec_uid
+        return sec_uid
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def get_video_by_url(self, video_url: str) -> Optional[TikTokVideo]:
+        """
+        Fetch single video metrics directly from its own page.
+        Supports: vt.tiktok.com, vm.tiktok.com, tiktok.com/@user/video/ID, tiktok.com/t/...
+        The video-detail page embeds full stats in its own rehydration JSON,
+        so we don't need to go through the user's feed at all.
+        """
+        await self._bootstrap_session()
+
+        resp = await self.client.get(video_url, headers={"Referer": self.BASE_URL})
+
+        if resp.status_code == 404:
+            raise TikTokScraperError("Video not found or private", 404)
+        if resp.status_code != 200:
+            raise TikTokScraperError(f"Video page returned HTTP {resp.status_code}", resp.status_code)
+
+        html = resp.text
+        final_url = str(resp.url)
+
+        if self._is_challenge_page(html):
+            raise TikTokScraperError(
+                "TikTok served a verification/challenge page instead of the video "
+                "- request was flagged as bot traffic.",
+                403,
+            )
+
+        video_id_match = re.search(r"/video/(\d{15,20})", final_url)
+        video_id = video_id_match.group(1) if video_id_match else self._extract_video_id(video_url)
+
+        data = self._extract_rehydration_json(html)
+        if not data:
+            raise TikTokScraperError(
+                "Could not find __UNIVERSAL_DATA_FOR_REHYDRATION__ on the video page "
+                "- TikTok page structure may have changed.",
+                502,
+            )
+
+        try:
+            item = data["__DEFAULT_SCOPE__"]["webapp.video-detail"]["itemInfo"]["itemStruct"]
+        except (KeyError, TypeError):
+            item = None
+
+        if not item:
+            raise TikTokScraperError(
+                f"Video data missing from page JSON for video {video_id} "
+                "- video may have been removed or made private.",
+                404,
+            )
+
+        video = self._parse_video_item(item, item.get("author", {}).get("uniqueId", ""))
+        if not video:
+            raise TikTokScraperError(f"Failed to parse video data for {video_id}", 502)
+        video.url = final_url
+        return video
+
+    async def get_user_feed(self, username: str, count: int = 30) -> List[TikTokVideo]:
+        """
+        Fetch latest videos from @username feed via the item_list API,
+        using a properly resolved secUid (this is the piece that was
+        missing before and caused every request to come back empty).
+        """
+        username = username.lstrip("@").strip()
+        sec_uid = await self._resolve_sec_uid(username)
+
+        videos: List[TikTokVideo] = []
+        cursor = 0
+        page_size = min(count, 35)  # TikTok caps item_list at ~35 per page
+
+        while len(videos) < count:
             params = {
                 "aid": "1988",
-                "count": min(count, 50),
-                "secUid": "",
-                "type": "post",
-                "username": username,
+                "secUid": sec_uid,
+                "count": page_size,
+                "cursor": cursor,
             }
-            
-            url = f"{self.BASE_URL}{self.API_ENDPOINT}"
-            resp = await self.client.get(url, params=params)
-            
+            resp = await self.client.get(
+                f"{self.BASE_URL}{self.ITEM_LIST_ENDPOINT}",
+                params=params,
+                headers={"Referer": f"{self.BASE_URL}/@{username}"},
+            )
+
             if resp.status_code == 403:
                 raise TikTokScraperError(
-                    "Access forbidden - msToken may be expired or invalid. "
-                    "Generate new token from browser DevTools.",
-                    403
+                    "Access forbidden fetching item_list - msToken may be expired/invalid "
+                    "or request was flagged as bot traffic.",
+                    403,
                 )
-            
-            if resp.status_code == 404:
-                raise TikTokScraperError(f"User @{username} not found", 404)
-            
             if resp.status_code != 200:
                 raise TikTokScraperError(
-                    f"API error: HTTP {resp.status_code} - {resp.text[:200]}",
-                    resp.status_code
+                    f"item_list API returned HTTP {resp.status_code}: {resp.text[:200]}",
+                    resp.status_code,
                 )
-            
-            data = resp.json()
-            
-            # Check API status code in response
+
+            try:
+                data = resp.json()
+            except json.JSONDecodeError:
+                raise TikTokScraperError(
+                    "item_list API did not return JSON - likely served a challenge page.",
+                    502,
+                )
+
             status_code = data.get("statusCode", data.get("status_code", 0))
-            if status_code != 0:
-                error_msg = data.get("statusMsg", data.get("message", "Unknown error"))
-                raise TikTokScraperError(f"TikTok API error: {error_msg}", 502)
-            
-            items = data.get("itemList", []) or data.get("item_list", [])
-            
-            if not items:
-                # Try alternative: fetch from user profile page
-                return await self._fetch_from_profile_page(username, count)
-            
-            videos = []
-            for item in items[:count]:
+            if status_code not in (0, None):
+                raise TikTokScraperError(
+                    f"TikTok API error: {data.get('statusMsg', data.get('message', 'Unknown error'))}",
+                    502,
+                )
+
+            items = data.get("itemList", []) or []
+            for item in items:
                 video = self._parse_video_item(item, username)
                 if video:
                     videos.append(video)
-            
-            return videos
-            
-        except TikTokScraperError:
-            raise
-        except httpx.TimeoutException:
-            raise TikTokScraperError("Request timeout - TikTok server slow to respond", 504)
-        except Exception as e:
-            raise TikTokScraperError(f"Failed to fetch @{username} feed: {str(e)[:200]}", 502)
-    
-    async def _fetch_from_profile_page(self, username: str, count: int) -> List[TikTokVideo]:
-        """
-        Fallback: Fetch videos from user profile page HTML.
-        Parses embedded JSON data.
-        """
-        url = f"{self.BASE_URL}/@{username}"
-        resp = await self.client.get(url)
-        
-        if resp.status_code != 200:
-            return []
-        
-        html = resp.text
-        
-        # Try to extract video data from embedded JSON
-        patterns = [
-            r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">(.*?)</script>',
-            r'"itemList":(\[.*?\]),"userList"',
-            r'"itemModule":(\{.*?\}),"userModule"',
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, html, re.DOTALL)
-            for match in matches:
-                try:
-                    data = json.loads(match)
-                    items = self._extract_items_from_json(data)
-                    if items:
-                        videos = []
-                        for item in items[:count]:
-                            video = self._parse_video_item(item, username)
-                            if video:
-                                videos.append(video)
-                        return videos
-                except (json.JSONDecodeError, KeyError):
-                    continue
-        
-        return []
-    
-    def _extract_items_from_json(self, data: dict) -> List[dict]:
-        """Extract video items from various JSON structures."""
-        paths = [
-            ["__DEFAULT_SCOPE__", "webapp.user-detail", "itemList"],
-            ["__DEFAULT_SCOPE__", "webapp.video-detail", "itemInfo", "itemStruct"],
-            ["itemModule"],
-            ["itemList"],
-        ]
-        
-        for path in paths:
-            current = data
-            try:
-                for key in path:
-                    current = current[key]
-                if isinstance(current, list):
-                    return current
-                elif isinstance(current, dict):
-                    return list(current.values())
-            except (KeyError, TypeError, IndexError):
-                continue
-        
-        return []
-    
-    async def _fetch_video_direct(self, video_id: str, video_url: str) -> Optional[TikTokVideo]:
-        """
-        Try to fetch single video directly (fallback method).
-        Follows redirects from short links.
-        """
-        # First, follow redirect to get final URL
-        resp = await self.client.get(video_url, follow_redirects=True)
-        
-        if resp.status_code != 200:
-            raise TikTokScraperError(f"Video {video_id} not accessible", 404)
-        
-        html = resp.text
-        
-        # Try to extract video data from HTML
-        # Pattern 1: Extract actual video ID from final URL (after redirect)
-        final_url_pattern = r'tiktok\.com/@[^/]+/video/(\d{15,20})'
-        final_match = re.search(final_url_pattern, str(resp.url))
-        if final_match:
-            video_id = final_match.group(1)
-        
-        # NEW APPROACH 2026: Parse embedded JSON data (like TikTok-Api v7.3.3)
-        # TikTok stores video data in __UNIVERSAL_DATA__ or SIGI_STATE
-        
-        video_data = None
-        
-        # Method 1: Extract from __UNIVERSAL_DATA__ (most common in 2026)
-        universal_match = re.search(
-            r'<script[^>]*id="__UNIVERSAL_DATA__"[^>]*>(.*?)</script>',
-            html,
-            re.DOTALL
-        )
-        if universal_match:
-            try:
-                json_str = universal_match.group(1).strip()
-                data = json.loads(json_str)
-                
-                # Navigate to video info
-                # Structure: data[scope][type][video_id]
-                if isinstance(data, dict):
-                    for scope_key, scope_val in data.items():
-                        if isinstance(scope_val, dict):
-                            for type_key, type_val in scope_val.items():
-                                if isinstance(type_val, dict) and video_id in type_val:
-                                    video_data = type_val[video_id]
-                                    break
-                        if video_data:
-                            break
-            except (json.JSONDecodeError, KeyError, TypeError):
-                pass
-        
-        # Method 2: Extract from SIGI_STATE (fallback)
-        if not video_data:
-            sigi_match = re.search(
-                r'window\["SIGI_STATE"\]\s*=\s*({.+?});',
-                html,
-                re.DOTALL
-            )
-            if sigi_match:
-                try:
-                    sigi_data = json.loads(sigi_match.group(1))
-                    item_module = sigi_data.get("ItemModule", {})
-                    if isinstance(item_module, dict) and video_id in item_module:
-                        video_data = item_module[video_id]
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    pass
-        
-        # Method 3: Extract from __INITIAL_PROPS__ (another fallback)
-        if not video_data:
-            props_match = re.search(
-                r'<script[^>]*id="__INITIAL_PROPS__"[^>]*>(.*?)</script>',
-                html,
-                re.DOTALL
-            )
-            if props_match:
-                try:
-                    props_data = json.loads(props_match.group(1).strip())
-                    # Try different structures
-                    for key in ["videoData", "itemInfo", "videoInfo"]:
-                        if key in props_data:
-                            video_data = props_data[key]
-                            break
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    pass
-        
-        # Successfully extracted video data?
-        if video_data and isinstance(video_data, dict):
-            try:
-                # Extract stats
-                stats = video_data.get("stats", video_data.get("statistics", {}))
-                author = video_data.get("author", video_data.get("authorInfo", {}))
-                music = video_data.get("music", {})
-                
-                views = int(stats.get("playCount", stats.get("view_count", stats.get("views", 0))))
-                likes = int(stats.get("diggCount", stats.get("like_count", stats.get("likes", 0))))
-                comments = int(stats.get("commentCount", stats.get("comment_count", stats.get("comments", 0))))
-                shares = int(stats.get("shareCount", stats.get("share_count", stats.get("shares", 0))))
-                
-                caption = video_data.get("desc", video_data.get("description", ""))
-                create_time = int(video_data.get("createTime", video_data.get("create_time", 0)))
-                
-                author_username = author.get("uniqueId", author.get("username", ""))
-                author_nickname = author.get("nickname", author.get("nickName", ""))
-                
-                return TikTokVideo(
-                    video_id=video_id,
-                    url=str(resp.url),
-                    views=views,
-                    likes=likes,
-                    comments=comments,
-                    shares=shares,
-                    caption=caption,
-                    create_time=create_time,
-                    author_username=author_username,
-                    author_nickname=author_nickname,
-                )
-            except (KeyError, TypeError, ValueError) as e:
-                # Data exists but malformed
-                pass
-        
-        # ALL METHODS FAILED - return stub with 0 metrics
-        return TikTokVideo(
-            video_id=video_id,
-            url=str(resp.url),
-            views=0,
-            likes=0,
-            comments=0,
-            shares=0,
-            caption="",
-            create_time=0,
-            author_username="",
-            author_nickname="",
-        )
-    
+
+            has_more = data.get("hasMore", False)
+            cursor = data.get("cursor", cursor)
+            if not has_more or not items:
+                break
+
+        return videos[:count]
+
+    # ------------------------------------------------------------------
+    # Parsing helpers
+    # ------------------------------------------------------------------
+
     def _parse_video_item(self, item: dict, username: str) -> Optional[TikTokVideo]:
-        """Parse video item from TikTok API response."""
+        """Parse a single video item from TikTok's item_list / video-detail JSON."""
         try:
             video_id = item.get("id") or item.get("aweme_id") or item.get("video_id")
             if not video_id:
                 return None
-            
+
             stats = item.get("stats", {}) or item.get("statistics", {}) or {}
             author = item.get("author", {}) or item.get("authorInfo", {}) or {}
-            
-            # Extract caption
+
             caption = item.get("desc", "") or item.get("description", "")
-            
-            # Extract create time
             create_time = item.get("createTime", item.get("create_time", 0))
-            if isinstance(create_time, str):
-                try:
-                    import time
-                    create_time = int(time.mktime(time.strptime(create_time, "%Y-%m-%d %H:%M:%S")))
-                except Exception:
-                    create_time = 0
-            
+
+            author_username = author.get("uniqueId") or author.get("username") or username
+
             return TikTokVideo(
                 video_id=str(video_id),
-                url=f"{self.BASE_URL}/@{username}/video/{video_id}",
-                views=int(stats.get("playCount", stats.get("view_count", stats.get("views", 0)))),
-                likes=int(stats.get("diggCount", stats.get("like_count", stats.get("likes", 0)))),
-                comments=int(stats.get("commentCount", stats.get("comment_count", stats.get("comments", 0)))),
-                shares=int(stats.get("shareCount", stats.get("share_count", stats.get("shares", 0)))),
+                url=f"{self.BASE_URL}/@{author_username}/video/{video_id}",
+                views=int(stats.get("playCount", 0) or 0),
+                likes=int(stats.get("diggCount", 0) or 0),
+                comments=int(stats.get("commentCount", 0) or 0),
+                shares=int(stats.get("shareCount", 0) or 0),
                 caption=caption,
                 create_time=int(create_time) if create_time else 0,
-                author_username=author.get("uniqueId", author.get("username", username)),
-                author_nickname=author.get("nickname", author.get("nickName", "")),
+                author_username=author_username,
+                author_nickname=author.get("nickname") or author.get("nickName") or "",
                 is_video=item.get("isVideo", True),
             )
         except Exception:
             return None
-    
+
     def _extract_video_id(self, url: str) -> Optional[str]:
-        """
-        Extract video ID from TikTok URL.
-        Supports multiple formats.
-        """
+        """Extract video ID from a TikTok URL when redirect resolution isn't available."""
         patterns = [
-            r'tiktok\.com/@[^/]+/video/(\d{15,20})',  # Full URL
-            r'vt\.tiktok\.com/([A-Za-z0-9]+)',         # Short link vt
-            r'vm\.tiktok\.com/([A-Za-z0-9]+)',         # Short link vm
-            r'm\.tiktok\.com/v/(\d{15,20})',           # Mobile
-            r'tiktok\.com/t/([A-Za-z0-9]+)',           # Share link
+            r'tiktok\.com/@[^/]+/video/(\d{15,20})',
+            r'vt\.tiktok\.com/([A-Za-z0-9]+)',
+            r'vm\.tiktok\.com/([A-Za-z0-9]+)',
+            r'm\.tiktok\.com/v/(\d{15,20})',
+            r'tiktok\.com/t/([A-Za-z0-9]+)',
         ]
-        
         for pattern in patterns:
             match = re.search(pattern, url)
             if match:
-                video_id = match.group(1)
-                # If short link ID, we need to resolve it
-                if len(video_id) < 15:
-                    # Short link - return as-is, will be resolved later
-                    return video_id
-                return video_id
-        
-        # Try to extract any long numeric ID as last resort
+                return match.group(1)
         match = re.search(r'(\d{15,20})', url)
-        if match:
-            return match.group(1)
-        
-        return None
-    
-    def _extract_username_from_url(self, url: str) -> Optional[str]:
-        """Extract username from TikTok URL."""
-        match = re.search(r'tiktok\.com/@([a-zA-Z0-9_.-]+)', url)
-        if match:
-            return match.group(1)
-        return None
+        return match.group(1) if match else None
 
 
 # ════════════════════════════════════════════════════════════════
@@ -439,23 +395,18 @@ class TikTokDirectScraper:
 async def fetch_video_metrics(video_url: str) -> Dict[str, Any]:
     """
     Fetch metrics for a single TikTok video.
-    
-    Args:
-        video_url: TikTok video URL (any format)
-    
-    Returns:
-        Dict with: video_id, views, likes, comments, shares, 
-                   author_username, author_nickname, url
-    
+
     Raises:
-        TikTokScraperError: If msToken not configured or API error
+        TikTokScraperError: with a specific, actionable reason if scraping fails.
+        (Callers should catch this and log the message - do NOT swallow it
+        into a fake zeroed result.)
     """
     async with TikTokDirectScraper() as scraper:
         video = await scraper.get_video_by_url(video_url)
-        
+
         if not video:
             raise TikTokScraperError("Video not found or not accessible", 404)
-        
+
         return {
             "video_id": video.video_id,
             "views": video.views,
@@ -470,14 +421,7 @@ async def fetch_video_metrics(video_url: str) -> Dict[str, Any]:
 
 async def fetch_user_feed(username: str, count: int = 30) -> List[Dict[str, Any]]:
     """
-    Fetch user feed (latest videos).
-    
-    Args:
-        username: TikTok username (without @)
-        count: Number of videos to fetch (max 50)
-    
-    Returns:
-        List of video dicts with metrics
+    Fetch user feed (latest videos) with real engagement metrics.
     """
     async with TikTokDirectScraper() as scraper:
         videos = await scraper.get_user_feed(username, count)
