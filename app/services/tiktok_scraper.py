@@ -85,7 +85,6 @@ class TikTokDirectScraper:
 
         self.client = httpx.AsyncClient(
             timeout=30.0,
-            http2=True,
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
