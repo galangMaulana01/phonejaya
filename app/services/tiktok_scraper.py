@@ -243,39 +243,106 @@ class TikTokDirectScraper:
         if final_match:
             video_id = final_match.group(1)
         
-        patterns = [
-            r'"id":["\s]*(\d{15,20})["\s]*,',
-            r'"video_id":["\s]*(\d{15,20})["\s]*,',
-            r'aweme_id["\s:]+(\d{15,20})',
-            r'"videoId":(\d{15,20})',
-        ]
+        # NEW APPROACH 2026: Parse embedded JSON data (like TikTok-Api v7.3.3)
+        # TikTok stores video data in __UNIVERSAL_DATA__ or SIGI_STATE
         
-        for pattern in patterns:
-            match = re.search(pattern, html)
-            if match:
-                extracted_id = match.group(1)
-                # Use extracted ID (matches final video after redirect)
-                if len(extracted_id) >= 15:
-                    # Try to find stats
-                    stats_match = re.search(r'"stats":\{([^}]+)\}', html)
-                    if stats_match:
-                        stats_str = stats_match.group(1)
-                        stats = dict(re.findall(r'(\w+):(\d+)', stats_str))
-                        
-                        return TikTokVideo(
-                            video_id=extracted_id,
-                            url=str(resp.url),
-                            views=int(stats.get("playCount", 0)),
-                            likes=int(stats.get("diggCount", 0)),
-                            comments=int(stats.get("commentCount", 0)),
-                            shares=int(stats.get("shareCount", 0)),
-                            caption="",
-                            create_time=0,
-                            author_username="",
-                            author_nickname="",
-                        )
+        video_data = None
         
-        # Last fallback: return stub with 0 metrics (will be updated on next sync)
+        # Method 1: Extract from __UNIVERSAL_DATA__ (most common in 2026)
+        universal_match = re.search(
+            r'<script[^>]*id="__UNIVERSAL_DATA__"[^>]*>(.*?)</script>',
+            html,
+            re.DOTALL
+        )
+        if universal_match:
+            try:
+                json_str = universal_match.group(1).strip()
+                data = json.loads(json_str)
+                
+                # Navigate to video info
+                # Structure: data[scope][type][video_id]
+                if isinstance(data, dict):
+                    for scope_key, scope_val in data.items():
+                        if isinstance(scope_val, dict):
+                            for type_key, type_val in scope_val.items():
+                                if isinstance(type_val, dict) and video_id in type_val:
+                                    video_data = type_val[video_id]
+                                    break
+                        if video_data:
+                            break
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+        
+        # Method 2: Extract from SIGI_STATE (fallback)
+        if not video_data:
+            sigi_match = re.search(
+                r'window\["SIGI_STATE"\]\s*=\s*({.+?});',
+                html,
+                re.DOTALL
+            )
+            if sigi_match:
+                try:
+                    sigi_data = json.loads(sigi_match.group(1))
+                    item_module = sigi_data.get("ItemModule", {})
+                    if isinstance(item_module, dict) and video_id in item_module:
+                        video_data = item_module[video_id]
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+        
+        # Method 3: Extract from __INITIAL_PROPS__ (another fallback)
+        if not video_data:
+            props_match = re.search(
+                r'<script[^>]*id="__INITIAL_PROPS__"[^>]*>(.*?)</script>',
+                html,
+                re.DOTALL
+            )
+            if props_match:
+                try:
+                    props_data = json.loads(props_match.group(1).strip())
+                    # Try different structures
+                    for key in ["videoData", "itemInfo", "videoInfo"]:
+                        if key in props_data:
+                            video_data = props_data[key]
+                            break
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+        
+        # Successfully extracted video data?
+        if video_data and isinstance(video_data, dict):
+            try:
+                # Extract stats
+                stats = video_data.get("stats", video_data.get("statistics", {}))
+                author = video_data.get("author", video_data.get("authorInfo", {}))
+                music = video_data.get("music", {})
+                
+                views = int(stats.get("playCount", stats.get("view_count", stats.get("views", 0))))
+                likes = int(stats.get("diggCount", stats.get("like_count", stats.get("likes", 0))))
+                comments = int(stats.get("commentCount", stats.get("comment_count", stats.get("comments", 0))))
+                shares = int(stats.get("shareCount", stats.get("share_count", stats.get("shares", 0))))
+                
+                caption = video_data.get("desc", video_data.get("description", ""))
+                create_time = int(video_data.get("createTime", video_data.get("create_time", 0)))
+                
+                author_username = author.get("uniqueId", author.get("username", ""))
+                author_nickname = author.get("nickname", author.get("nickName", ""))
+                
+                return TikTokVideo(
+                    video_id=video_id,
+                    url=str(resp.url),
+                    views=views,
+                    likes=likes,
+                    comments=comments,
+                    shares=shares,
+                    caption=caption,
+                    create_time=create_time,
+                    author_username=author_username,
+                    author_nickname=author_nickname,
+                )
+            except (KeyError, TypeError, ValueError) as e:
+                # Data exists but malformed
+                pass
+        
+        # ALL METHODS FAILED - return stub with 0 metrics
         return TikTokVideo(
             video_id=video_id,
             url=str(resp.url),
