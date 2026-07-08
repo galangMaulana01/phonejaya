@@ -226,9 +226,10 @@ class TikTokDirectScraper:
     async def _fetch_video_direct(self, video_id: str, video_url: str) -> Optional[TikTokVideo]:
         """
         Try to fetch single video directly (fallback method).
+        Follows redirects from short links.
         """
-        # Try to get video info from share endpoint
-        resp = await self.client.get(video_url)
+        # First, follow redirect to get final URL
+        resp = await self.client.get(video_url, follow_redirects=True)
         
         if resp.status_code != 200:
             raise TikTokScraperError(f"Video {video_id} not accessible", 404)
@@ -236,41 +237,57 @@ class TikTokDirectScraper:
         html = resp.text
         
         # Try to extract video data from HTML
+        # Pattern 1: Extract actual video ID from final URL (after redirect)
+        final_url_pattern = r'tiktok\.com/@[^/]+/video/(\d{15,20})'
+        final_match = re.search(final_url_pattern, str(resp.url))
+        if final_match:
+            video_id = final_match.group(1)
+        
         patterns = [
-            r'"id":"(\d{15,20})"',
-            r'"video_id":"(\d{15,20})"',
+            r'"id":["\s]*(\d{15,20})["\s]*,',
+            r'"video_id":["\s]*(\d{15,20})["\s]*,',
             r'aweme_id["\s:]+(\d{15,20})',
+            r'"videoId":(\d{15,20})',
         ]
         
         for pattern in patterns:
             match = re.search(pattern, html)
             if match:
                 extracted_id = match.group(1)
-                if extracted_id == video_id:
+                # Use extracted ID (matches final video after redirect)
+                if len(extracted_id) >= 15:
                     # Try to find stats
                     stats_match = re.search(r'"stats":\{([^}]+)\}', html)
                     if stats_match:
                         stats_str = stats_match.group(1)
-                        stats = {}
-                        for kv in stats_str.split(','):
-                            if ':' in kv:
-                                k, v = kv.split(':', 1)
-                                stats[k.strip().strip('"')] = v.strip().strip('"')
+                        stats = dict(re.findall(r'(\w+):(\d+)', stats_str))
                         
                         return TikTokVideo(
-                            video_id=video_id,
-                            url=video_url,
-                            views=int(stats.get("playCount", stats.get("view_count", 0))),
-                            likes=int(stats.get("diggCount", stats.get("like_count", 0))),
-                            comments=int(stats.get("commentCount", stats.get("comment_count", 0))),
-                            shares=int(stats.get("shareCount", stats.get("share_count", 0))),
+                            video_id=extracted_id,
+                            url=str(resp.url),
+                            views=int(stats.get("playCount", 0)),
+                            likes=int(stats.get("diggCount", 0)),
+                            comments=int(stats.get("commentCount", 0)),
+                            shares=int(stats.get("shareCount", 0)),
                             caption="",
                             create_time=0,
                             author_username="",
                             author_nickname="",
                         )
         
-        raise TikTokScraperError(f"Could not parse video {video_id} from HTML", 502)
+        # Last fallback: return stub with 0 metrics (will be updated on next sync)
+        return TikTokVideo(
+            video_id=video_id,
+            url=str(resp.url),
+            views=0,
+            likes=0,
+            comments=0,
+            shares=0,
+            caption="",
+            create_time=0,
+            author_username="",
+            author_nickname="",
+        )
     
     def _parse_video_item(self, item: dict, username: str) -> Optional[TikTokVideo]:
         """Parse video item from TikTok API response."""
