@@ -158,6 +158,12 @@ async def _resolve_share_link(url: str) -> str:
     This resolves the share link to its canonical URL first, following
     both real HTTP redirects and (if Facebook uses a JS/meta-refresh bounce
     instead of a real redirect) a <meta http-equiv="refresh"> tag.
+
+    Facebook's edge is picky about headers on share-link requests
+    specifically (a bare-bones request can get a flat 400 Bad Request
+    before any redirect logic even runs) - so we send a fuller
+    browser-like header set, and fall back to the mbasic domain (looser
+    validation) if the www domain rejects the request outright.
     """
     import re
     import httpx
@@ -171,25 +177,48 @@ async def _resolve_share_link(url: str) -> str:
     if c_user and xs:
         cookies = {"c_user": c_user, "xs": xs}
 
-    try:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=15.0,
-            cookies=cookies,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-                )
-            },
-        ) as client:
-            resp = await client.get(url)
-            final_url = str(resp.url)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+        "Upgrade-Insecure-Requests": "1",
+        "sec-ch-ua": '"Chromium";v="126", "Not.A/Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-site": "none",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document",
+        "sec-fetch-user": "?1",
+    }
 
-            if final_url != url and "/share/" not in final_url:
+    candidates = [url]
+    if "www.facebook.com" in url:
+        candidates.append(url.replace("www.facebook.com", "mbasic.facebook.com"))
+    elif "facebook.com" in url and "mbasic" not in url and "m.facebook.com" not in url:
+        candidates.append(url.replace("facebook.com", "mbasic.facebook.com"))
+
+    last_error = None
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=15.0, cookies=cookies, headers=headers
+    ) as client:
+        for candidate in candidates:
+            try:
+                resp = await client.get(candidate)
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+            if resp.status_code >= 400:
+                last_error = f"HTTP {resp.status_code} resolving {candidate}"
+                continue
+
+            final_url = str(resp.url)
+            if final_url != candidate and "/share/" not in final_url:
                 return final_url
 
-            # No real HTTP redirect happened - check for a meta-refresh/JS bounce
             match = re.search(
                 r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\'][^;]+;\s*url=([^"\']+)',
                 resp.text,
@@ -199,10 +228,14 @@ async def _resolve_share_link(url: str) -> str:
                 return match.group(1).replace("&amp;", "&")
 
             return final_url
-    except Exception:
-        # If resolution fails for any reason, fall back to the original URL -
-        # the downstream scraper will raise its own clear error anyway.
-        return url
+
+    raise FacebookScraperError(
+        f"Could not resolve the share link {url} - Facebook rejected the request "
+        f"outright ({last_error}). This can happen if Facebook is blocking "
+        "non-browser requests to share links specifically; try grabbing the "
+        "direct post URL instead of a share link if this keeps failing.",
+        502,
+    )
 
 
 async def get_post_by_url(post_url: str, post_id: Optional[str] = None) -> Dict[str, Any]:
