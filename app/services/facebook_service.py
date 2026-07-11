@@ -31,7 +31,7 @@ def extract_facebook_post_id(url: str) -> Optional[str]:
     match = re.search(r'[?&]fbid=(\d+)', url)
     if match:
         return match.group(1)
-    match = re.search(r'/share/(?:v|r)/([\w-]+)', url)
+    match = re.search(r'/share/(?:v|r|p)/([\w-]+)', url)
     if match:
         return match.group(1)
     match = re.search(r'/(\d{10,})', url)

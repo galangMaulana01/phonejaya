@@ -4,22 +4,27 @@ Facebook Direct Scraper - core logic shared by both:
   - facebook_feed_scraper.py  (cron auto-detect from a page's feed)
 
 We still use the `facebook-scraper` pip package (kevinzg) as the actual
-HTML-parsing engine - it targets mbasic.facebook.com (the lightweight,
-non-JS version of Facebook), which is far more forgiving than IG/TikTok's
-web apps: no JS challenge, no signed request params. Its parsing logic for
-mbasic's HTML has been refined over years, so we reuse it rather than
-reinventing that part from scratch.
+HTML-parsing engine - for single-post fetch it targets m.facebook.com
+(lightweight mobile web, no JS challenge), and mbasic.facebook.com for
+some feed pagination. Its parsing logic has been refined over years, so
+we reuse it rather than reinventing that part from scratch.
 
 What THIS file adds on top of the raw library (this is the part that was
 missing before):
   1. Login/cookie support (`c_user` + `xs` cookies), via
      `facebook_scraper.set_cookies()`. Some pages/videos increasingly
-     require a logged-in session even on mbasic - without this, those
-     requests fail (previously nothing handled that case explicitly).
+     require a logged-in session - without this, those requests fail
+     (previously nothing handled that case explicitly).
   2. Same non-ASCII cookie sanity check we added for Instagram's
      sessionid, so a mangled copy-paste fails with a clear message
      instead of a raw UnicodeEncodeError deep in the request layer.
-  3. A single source of truth: both the manual-link and feed-based
+  3. Share-link resolution (`_resolve_share_link`): Facebook's universal
+     share links (/share/p/, /share/v/, /share/r/, fb.watch/...) are
+     bounce pages, not the real post - facebook-scraper's parser looks
+     for elements that only exist on the actual permalink page, so a
+     bounce URL always came back as "no posts found" even for a perfectly
+     valid, public post. We now resolve to the canonical URL first.
+  4. A single source of truth: both the manual-link and feed-based
      callers go through this one module instead of two independent
      copies of similar scraping code that can drift apart.
 
@@ -141,11 +146,71 @@ def _post_to_dict(post: dict, fallback_post_id: str = "", fallback_page_name: st
 # Public async API
 # ════════════════════════════════════════════════════════════════
 
+async def _resolve_share_link(url: str) -> str:
+    """
+    Facebook's universal "share" links (/share/p/, /share/v/, /share/r/,
+    fb.watch/...) are bounce pages, not the actual post - they redirect to
+    the real permalink. facebook-scraper's parser looks for specific
+    elements (top_level_post_id, async_like) that only exist on the real
+    post page, so if we hand it the bounce URL directly it finds nothing
+    and logs "No raw posts (<article> elements) were found".
+
+    This resolves the share link to its canonical URL first, following
+    both real HTTP redirects and (if Facebook uses a JS/meta-refresh bounce
+    instead of a real redirect) a <meta http-equiv="refresh"> tag.
+    """
+    import re
+    import httpx
+
+    if not any(marker in url for marker in ("/share/", "fb.watch")):
+        return url  # already a direct link, nothing to resolve
+
+    cookies = {}
+    c_user = (os.getenv("FACEBOOK_C_USER") or "").strip()
+    xs = (os.getenv("FACEBOOK_XS") or "").strip()
+    if c_user and xs:
+        cookies = {"c_user": c_user, "xs": xs}
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=15.0,
+            cookies=cookies,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                )
+            },
+        ) as client:
+            resp = await client.get(url)
+            final_url = str(resp.url)
+
+            if final_url != url and "/share/" not in final_url:
+                return final_url
+
+            # No real HTTP redirect happened - check for a meta-refresh/JS bounce
+            match = re.search(
+                r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\'][^;]+;\s*url=([^"\']+)',
+                resp.text,
+                re.IGNORECASE,
+            )
+            if match:
+                return match.group(1).replace("&amp;", "&")
+
+            return final_url
+    except Exception:
+        # If resolution fails for any reason, fall back to the original URL -
+        # the downstream scraper will raise its own clear error anyway.
+        return url
+
+
 async def get_post_by_url(post_url: str, post_id: Optional[str] = None) -> Dict[str, Any]:
     """Fetch a single Facebook post/video's metrics by URL."""
     has_session = _ensure_cookies_configured()
+    resolved_url = await _resolve_share_link(post_url)
     try:
-        result = await asyncio.to_thread(_scrape_post_sync, post_url, post_id, has_session)
+        result = await asyncio.to_thread(_scrape_post_sync, resolved_url, post_id, has_session, post_url)
         return result
     except FacebookScraperError:
         raise
@@ -153,7 +218,7 @@ async def get_post_by_url(post_url: str, post_id: Optional[str] = None) -> Dict[
         raise FacebookScraperError(f"Facebook scrape failed: {str(e)[:300]}", 502)
 
 
-def _scrape_post_sync(post_url: str, post_id: Optional[str], has_session: bool) -> Dict[str, Any]:
+def _scrape_post_sync(post_url: str, post_id: Optional[str], has_session: bool, original_url: str = "") -> Dict[str, Any]:
     from facebook_scraper import get_posts
     from facebook_scraper import exceptions as fb_exceptions
 
@@ -187,9 +252,14 @@ def _scrape_post_sync(post_url: str, post_id: Optional[str], has_session: bool) 
             posts = []
 
     if not posts:
+        resolved_note = (
+            f" (original link {original_url} resolved to {post_url})"
+            if original_url and original_url != post_url else ""
+        )
         raise FacebookScraperError(
-            "Post not found or not accessible - it may be private, deleted, "
-            "or require a logged-in session that isn't configured.",
+            f"Post not found or not accessible{resolved_note} - it may be private, "
+            "deleted, require a logged-in session that isn't configured, or be a "
+            "content type (e.g. a newer Reels layout) this parser doesn't recognize.",
             404,
         )
 
