@@ -146,6 +146,31 @@ def _post_to_dict(post: dict, fallback_post_id: str = "", fallback_page_name: st
 # Public async API
 # ════════════════════════════════════════════════════════════════
 
+def _clean_story_url(url: str) -> str:
+    """
+    Facebook's redirect from a /share/ link lands on story.php with extra
+    referral/tracking params (rdid, share_url, and a redundant post_id)
+    tacked on. Those extra params appear to make Facebook render a
+    different page variant (a "shared from elsewhere" wrapper) that
+    facebook-scraper's parser doesn't recognize - so we strip the URL
+    down to just story_fbid + id, which is all that's actually needed to
+    identify the post.
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    parsed = urlparse(url)
+    if "story.php" not in parsed.path:
+        return url
+
+    params = parse_qs(parsed.query)
+    story_fbid = params.get("story_fbid", [None])[0]
+    page_id = params.get("id", [None])[0]
+
+    if story_fbid and page_id:
+        return f"https://www.facebook.com/story.php?story_fbid={story_fbid}&id={page_id}"
+    return url
+
+
 async def _resolve_share_link(url: str) -> str:
     """
     Facebook's universal "share" links (/share/p/, /share/v/, /share/r/,
@@ -217,7 +242,7 @@ async def _resolve_share_link(url: str) -> str:
 
             final_url = str(resp.url)
             if final_url != candidate and "/share/" not in final_url:
-                return final_url
+                return _clean_story_url(final_url)
 
             match = re.search(
                 r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\'][^;]+;\s*url=([^"\']+)',
