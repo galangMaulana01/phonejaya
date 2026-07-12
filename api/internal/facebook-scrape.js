@@ -125,7 +125,37 @@ console.log('[facebook-scrape] Module initialized, cleaning /tmp...');
 forceCleanTmp();
 
 async function launchBrowser() {
+  // CRITICAL: Clean /tmp RIGHT BEFORE downloading Chromium
+  // This prevents corrupted tar from previous failed invocation
+  console.log('[facebook-scrape] Pre-launch cleanup starting...');
+  try {
+    const paths = [
+      '/tmp/chromium',
+      '/tmp/chromium-pack',
+      '/tmp/swiftshader',
+      '/tmp/al2023.tar.br',
+      '/tmp/al2023',
+      '/tmp/fonts.tar.br',
+      '/tmp/fonts',
+    ];
+    let cleanedCount = 0;
+    for (const p of paths) {
+      if (fs.existsSync(p)) {
+        fs.rmSync(p, { recursive: true, force: true });
+        console.log('[facebook-scrape] Cleaned:', p);
+        cleanedCount++;
+      }
+    }
+    if (cleanedCount > 0) {
+      console.log('[facebook-scrape] Pre-launch cleanup done:', cleanedCount, 'paths');
+    }
+  } catch (e) {
+    console.warn('[facebook-scrape] Pre-launch cleanup failed:', e.message);
+  }
+  
+  console.log('[facebook-scrape] Downloading Chromium from:', CHROMIUM_PACK_URL);
   const executablePath = await chromium.executablePath(CHROMIUM_PACK_URL);
+  console.log('[facebook-scrape] Chromium downloaded to:', executablePath);
   return playwright.launch({
     args: chromium.args,
     executablePath,

@@ -66,7 +66,7 @@ def _validate_ascii(name: str, value: str) -> None:
         )
 
 
-_PLAYWRIGHT_TIMEOUT_S = 55.0
+_PLAYWRIGHT_TIMEOUT_S = 80.0  # Increased from 55s to handle cold start + download + scraping
 _PLAYWRIGHT_MAX_ATTEMPTS = 2
 
 
