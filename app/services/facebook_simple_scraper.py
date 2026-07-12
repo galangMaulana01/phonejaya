@@ -20,7 +20,9 @@ HOW TO GET COOKIES:
 NOTE: Cookies expire every 30-60 days. Refresh when scraping fails.
 """
 import os
+import re
 import logging
+import httpx
 from typing import Optional, Dict, Any
 
 from facebook_scraper import get_posts, set_cookies
@@ -137,11 +139,13 @@ async def fetch_post_metrics(post_url: str) -> Dict[str, Any]:
     logger.info(f"Scraping Facebook post: {post_url[:80]}")
     
     try:
+        logger.info(f"Attempting to scrape with facebook-scraper library (timeout=30s)")
         posts = list(get_posts(
             post_urls=[post_url],  # type: ignore
             options={
                 "allow_extra_requests": True,
                 "remove_expired": False,
+                "cookies": {"c_user": os.getenv("FACEBOOK_C_USER", ""), "xs": os.getenv("FACEBOOK_XS", "")} if os.getenv("FACEBOOK_C_USER") else None,
             },
             extra_info=True,
             timeout=30
@@ -155,6 +159,7 @@ async def fetch_post_metrics(post_url: str) -> Dict[str, Any]:
             )
         
         post = posts[0]
+        logger.debug(f"Raw post data: {list(post.keys())}")
         
         # Check if post is available
         if not post.get("available", True):
@@ -165,9 +170,38 @@ async def fetch_post_metrics(post_url: str) -> Dict[str, Any]:
         
         result = _post_to_dict(post)
         
+        # CRITICAL VALIDATION: Check if scraping actually succeeded
+        # facebook-scraper sometimes returns empty posts without throwing errors
+        likes = result.get("likes", 0)
+        comments = result.get("comments", 0)
+        shares = result.get("shares", 0)
+        views = result.get("views", 0)
+        
+        # If ALL metrics are 0, likely parsing failed (Facebook changed HTML structure)
+        if likes == 0 and comments == 0 and shares == 0 and views == 0:
+            logger.warning(f"Post found but all metrics are 0 - possible parsing failure")
+            logger.warning(f"Post keys: {list(post.keys())}")
+            logger.warning(f"Post text preview: {result.get('text', '')[:100]}")
+            
+            # Check if we at least got post_id (means we found something)
+            if not result.get("post_id"):
+                # TRY FALLBACK: Direct HTTP scrape without facebook-scraper library
+                logger.info("Attempting fallback: direct HTTP scraping...")
+                fallback_result = await _scrape_with_regex(post_url)
+                if fallback_result:
+                    logger.info(f"Fallback success: {fallback_result}")
+                    return fallback_result
+                
+                raise FacebookScraperError(
+                    f"Found post but couldn't extract metrics - Facebook may have changed page structure. "
+                    f"Raw post keys: {list(post.keys())[:10]}. "
+                    f"Try refreshing Facebook cookies (FACEBOOK_C_USER, FACEBOOK_XS).",
+                    500
+                )
+        
         logger.info(
-            f"Facebook scraping success: {result['likes']} likes, "
-            f"{result['comments']} comments, {result['shares']} shares"
+            f"Facebook scraping success: {likes} likes, {comments} comments, "
+            f"{shares} shares, {views} views"
         )
         
         return result
@@ -213,10 +247,94 @@ async def fetch_post_metrics(post_url: str) -> Dict[str, Any]:
             )
 
 
+async def _scrape_with_regex(post_url: str) -> Optional[Dict[str, Any]]:
+    """
+    Fallback: Direct HTTP scraping with regex parsing.
+    Used when facebook-scraper library fails to parse HTML structure.
+    
+    This is simpler but more fragile - only used as last resort.
+    """
+    try:
+        c_user = os.getenv("FACEBOOK_C_USER", "")
+        xs = os.getenv("FACEBOOK_XS", "")
+        
+        cookies = {}
+        if c_user and xs:
+            cookies = {"c_user": c_user, "xs": xs}
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        
+        async with httpx.AsyncClient(cookies=cookies, headers=headers, timeout=30) as client:
+            resp = await client.get(post_url, follow_redirects=True)
+            if resp.status_code != 200:
+                logger.warning(f"Direct HTTP scrape failed: HTTP {resp.status_code}")
+                return None
+            
+            html = resp.text
+            
+            # Try to extract metrics with regex patterns
+            # Facebook uses various formats, try multiple patterns
+            
+            likes_match = re.search(r'"likes":\s*"?(\d+)"?', html) or \
+                         re.search(r'(\d{1,3}(?:,\d{3})*)\s*[Ll]ikes?', html) or \
+                         re.search(r'data-testid="UFI2LikesCount"\S*>(\d+)', html)
+            likes = int(likes_match.group(1).replace(',', '')) if likes_match else 0
+            
+            comments_match = re.search(r'"comments":\s*"?(\d+)"?', html) or \
+                            re.search(r'(\d{1,3}(?:,\d{3})*)\s*[Cc]omments?', html) or \
+                            re.search(r'data-testid="UFI2CommentsCount"\S*>(\d+)', html)
+            comments = int(comments_match.group(1).replace(',', '')) if comments_match else 0
+            
+            shares_match = re.search(r'"shares":\s*"?(\d+)"?', html) or \
+                          re.search(r'(\d{1,3}(?:,\d{3})*)\s*[Ss]hares?', html) or \
+                          re.search(r'data-testid="shareCount"\S*>(\d+)', html)
+            shares = int(shares_match.group(1).replace(',', '')) if shares_match else 0
+            
+            views_match = re.search(r'"views":\s*"?(\d+)"?', html) or \
+                         re.search(r'(\d{1,3}(?:,\d{3})*)\s*[Vv]iews?', html) or \
+                         re.search(r'data-testid="videoViewCount"\S*>([^<]+)', html)
+            views = 0
+            if views_match:
+                views_str = views_match.group(1).replace(',', '')
+                # Handle "1.5K" format
+                if 'K' in views_str.upper():
+                    views = int(float(views_str.replace('K', '').replace(',', '')) * 1000)
+                elif 'M' in views_str.upper():
+                    views = int(float(views_str.replace('M', '').replace(',', '')) * 1000000)
+                else:
+                    views = int(views_str)
+            
+            # If we got at least ONE non-zero metric, return success
+            if likes > 0 or comments > 0 or shares > 0 or views > 0:
+                logger.info(f"Regex scraping success: {likes} likes, {comments} comments, {shares} shares, {views} views")
+                return {
+                    "post_id": re.search(r'story_fbid=(\d+)', post_url) or re.search(r'/(\d{15,})', post_url),
+                    "likes": likes,
+                    "comments": comments,
+                    "shares": shares,
+                    "views": views,
+                    "text": "",
+                }
+            
+            logger.warning(f"Regex scraping found no metrics in HTML")
+            return None
+            
+    except Exception as e:
+        logger.exception(f"Regex scraping failed: {e}")
+        return None
+
+
 # Convenience function for influencer service
 async def get_post_by_url(post_url: str, post_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Wrapper for fetch_post_metrics() with optional post_id parameter.
     Maintains API compatibility with old facebook_service.py
     """
-    return await fetch_post_metrics(post_url)
+    result = await fetch_post_metrics(post_url)
+    if not result.get("post_id") and post_id:
+        result["post_id"] = post_id
+    return result
