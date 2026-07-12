@@ -20,12 +20,6 @@
       "dest": "api/index.py"
     }
   ],
-  "functions": {
-    "api/internal/facebook-scrape.js": {
-      "memory": 1024,
-      "maxDuration": 60
-    }
-  },
   "env": {
     "PYTHONPATH": "/var/task"
   }
