@@ -230,13 +230,12 @@ async def create_video(
         "unit_id": payload.unit_id,
         "unit_label": unit_label,
         "platform": payload.platform.value,
-        "url": payload.url,
-        "views": views,
-        "likes": likes,
-        "comments": comments,
-        "shares": shares,
-        "author_username": author_username,
-        "author_nickname": author_nickname,
+        "url": str(payload.url),
+        "views": int(views) if views else 0,
+        "likes": int(likes) if likes else 0,
+        "comments": int(comments) if comments else 0,
+        "shares": int(shares) if shares else 0,
+        "product_id": str(payload.product_id) if payload.product_id else None,  # NEW: Optional product linkage
         "uploaded_at": uploaded_at,
         "updated_at": now,
         "created_at": now,
@@ -461,3 +460,76 @@ async def list_influencers(db: AsyncIOMotorDatabase) -> List[dict]:
         {"influencer_id": u["username"], "name": u.get("name", ""), "cabang": u.get("cabang", "")}
         for u in users
     ]
+
+
+async def get_product_catalog(db: AsyncIOMotorDatabase, influencer_id: str) -> List[dict]:
+    """
+    Get product catalog with video counts for influencer.
+    Shows which products have content and which are "naked" (no videos).
+    
+    Returns:
+    [
+      {
+        "product_id": "PRD-001",
+        "unit_id": "UNT-20250101-0001",
+        "product_name": "iPhone 15 Pro 256GB",
+        "price": 19999000,
+        "videos_count": 3,
+        "has_content": true,
+        "needs_content": false,
+        "latest_video_date": "2026-07-10T10:30:00Z"
+      },
+      {
+        "product_id": null,  # Products without videos
+        "unit_id": "UNT-20250101-0002",
+        "product_name": "Samsung S24 128GB",
+        "price": 18999000,
+        "videos_count": 0,
+        "has_content": false,
+        "needs_content": true,
+        "latest_video_date": null
+      }
+    ]
+    """
+    # Get influencer with products array
+    influencer = await db.users.find_one({"_id": ObjectId(influencer_id)})
+    if not influencer or "products" not in influencer:
+        return []  # No products
+    
+    products = influencer.get("products", [])
+    if not products:
+        return []
+    
+    # Get video counts per product (unit_id)
+    video_counts = await db.influencer_videos.aggregate([
+        {"$match": {"influencer_id": influencer_id}},
+        {"$group": {
+            "_id": "$unit_id",
+            "count": {"$sum": 1},
+            "latest_date": {"$max": "$uploaded_at"}
+        }}
+    ]).to_list(length=None)
+    
+    # Convert to dict for easy lookup
+    count_map = {vc["_id"]: {"count": vc["count"], "latest": vc["latest_date"]} for vc in video_counts}
+    
+    # Build catalog
+    catalog = []
+    for p in products:
+        unit_id = p.get("unit_id")
+        video_info = count_map.get(unit_id, {"count": 0, "latest": None})
+        
+        catalog.append({
+            "unit_id": unit_id,
+            "product_name": f"{p.get('merk', '')} {p.get('tipe', '')} {p.get('storage', '')}".strip(),
+            "price": p.get("price", 0),
+            "videos_count": video_info["count"],
+            "has_content": video_info["count"] > 0,
+            "needs_content": video_info["count"] == 0,
+            "latest_video_date": video_info["latest"].isoformat() if video_info["latest"] else None
+        })
+    
+    # Sort: products without content first
+    catalog.sort(key=lambda x: (x["has_content"], -x["price"]))  # Naked + expensive first
+    
+    return catalog

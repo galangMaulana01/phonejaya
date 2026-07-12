@@ -16,6 +16,7 @@ class VideoCreateRequest(BaseModel):
     unit_id: str
     platform: PlatformEnum
     url: HttpUrl
+    product_id: Optional[str] = None  # NEW: Optional product linkage
 
     @field_validator("unit_id")
     @classmethod
@@ -28,6 +29,13 @@ class VideoCreateRequest(BaseModel):
     @classmethod
     def url_to_str(cls, v: HttpUrl) -> str:
         return str(v)
+
+
+class VideoCreateFetchRequest(BaseModel):
+    unit_id: str
+    platform: PlatformEnum
+    url: HttpUrl
+    product_id: Optional[str] = None  # NEW: Optional product linkage
 
 
 class VideoResponse(BaseModel):
