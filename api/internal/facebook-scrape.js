@@ -34,6 +34,26 @@
  */
 
 const chromium = require('@sparticuz/chromium-min');
+
+// Some errors from the Chromium download/extraction pipeline (e.g. a
+// corrupted/partial tar from a previous invocation that got killed mid-
+// download by the function timeout) surface as raw stream 'error' events
+// rather than a rejected Promise - these bypass any try/catch around
+// `await chromium.executablePath()` entirely and crash the process. We
+// can't catch and recover the CURRENT request in that case, but we can at
+// least wipe the corrupted cache here so the next invocation gets a clean
+// download instead of hitting the exact same crash forever.
+process.on('uncaughtException', (err) => {
+  console.error('[facebook-scrape] uncaughtException:', err && err.message);
+  try {
+    cleanCachedChromium();
+  } catch (e) {
+    /* best effort */
+  }
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[facebook-scrape] unhandledRejection:', reason);
+});
 const { chromium: playwright } = require('playwright-core');
 
 // Pinned to a version confirmed to still support CommonJS (v149+ dropped it).
@@ -48,6 +68,36 @@ const BLOCKED_RESOURCE_TYPES = new Set(['image', 'font', 'media', 'stylesheet'])
 // Reused across warm invocations of the same serverless instance.
 let browserPromise = null;
 
+const fs = require('fs');
+
+function cleanCachedChromium() {
+  const paths = [
+    '/tmp/chromium',
+    '/tmp/chromium-pack',
+    '/tmp/swiftshader',
+    '/tmp/al2023.tar.br',
+    '/tmp/al2023',
+    '/tmp/fonts.tar.br',
+    '/tmp/fonts',
+  ];
+  for (const p of paths) {
+    try {
+      fs.rmSync(p, { recursive: true, force: true });
+    } catch (e) {
+      /* ignore - best effort cleanup */
+    }
+  }
+}
+
+async function launchBrowser() {
+  const executablePath = await chromium.executablePath(CHROMIUM_PACK_URL);
+  return playwright.launch({
+    args: chromium.args,
+    executablePath,
+    headless: true,
+  });
+}
+
 async function getBrowser() {
   if (browserPromise) {
     try {
@@ -59,12 +109,28 @@ async function getBrowser() {
     browserPromise = null;
   }
 
-  browserPromise = playwright.launch({
-    args: chromium.args,
-    executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
-    headless: true,
-  });
-  return browserPromise;
+  try {
+    browserPromise = launchBrowser();
+    return await browserPromise;
+  } catch (firstError) {
+    // Most likely cause: a previous cold start got killed mid-download by
+    // the function timeout, leaving a corrupted/partial chromium pack
+    // cached in /tmp - every invocation after that keeps failing the same
+    // way until that stale cache is cleared. Wipe it and retry once with
+    // a fresh download before giving up.
+    browserPromise = null;
+    cleanCachedChromium();
+    try {
+      browserPromise = launchBrowser();
+      return await browserPromise;
+    } catch (secondError) {
+      browserPromise = null;
+      throw new Error(
+        `Browser launch failed even after clearing cached Chromium files. ` +
+        `First error: ${firstError.message}. Retry error: ${secondError.message}`
+      );
+    }
+  }
 }
 
 function parseCount(str) {
