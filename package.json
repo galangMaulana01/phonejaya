@@ -2,6 +2,5 @@
   "name": "phonejaya-scraper-fn",
   "version": "1.0.0",
   "private": true,
-  "comments": "playwright-core and @sparticuz/chromium-min REMOVED - only TikTok and Instagram now (no Facebook Playwright scraper)",
   "dependencies": {}
 }
