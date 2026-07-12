@@ -13,17 +13,17 @@ class PlatformEnum(str, Enum):
 
 
 class VideoCreateRequest(BaseModel):
-    unit_id: str
+    unit_id: Optional[str] = None  # Optional: null/empty means general content, no product linked
     platform: PlatformEnum
     url: HttpUrl
-    product_id: Optional[str] = None  # NEW: Optional product linkage
+    product_id: Optional[str] = None  # DEPRECATED - kept for backward compat, not used by backend logic
 
-    @field_validator("unit_id")
+    @field_validator("unit_id", mode="before")
     @classmethod
-    def unit_id_not_empty(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("Unit ID tidak boleh kosong")
-        return v.strip()
+    def empty_unit_id_to_none(cls, v):
+        if v is not None and isinstance(v, str) and not v.strip():
+            return None
+        return v
 
     @field_validator("url")
     @classmethod
@@ -32,10 +32,10 @@ class VideoCreateRequest(BaseModel):
 
 
 class VideoCreateFetchRequest(BaseModel):
-    unit_id: str
+    unit_id: Optional[str] = None
     platform: PlatformEnum
     url: HttpUrl
-    product_id: Optional[str] = None  # NEW: Optional product linkage
+    product_id: Optional[str] = None  # DEPRECATED - kept for backward compat, not used by backend logic
 
 
 class VideoResponse(BaseModel):
@@ -44,7 +44,7 @@ class VideoResponse(BaseModel):
     influencer_id: str
     influencer_name: str
     cabang: str
-    unit_id: str
+    unit_id: Optional[str] = None
     unit_label: str
     platform: str
     url: str
@@ -74,6 +74,7 @@ class CatalogItem(BaseModel):
     harga_jual: int
     kategori: str
     has_video: bool
+    videos_count: int = 0  # NEW: how many videos already exist for this unit (many-per-product model)
     video_id: Optional[str] = None
 
 

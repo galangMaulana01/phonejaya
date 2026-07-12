@@ -122,18 +122,20 @@ async def get_catalog(
         ]
     units = await db.units.find(query).sort("_id", -1).limit(200).to_list(length=200)
 
-    # Ambil video_ids yang sudah dibuat influencer ini
-    video_unit_ids = set()
+    # Ambil video count per unit_id yang sudah dibuat influencer ini
+    video_counts: dict = {}
     video_ids_map = {}
     videos = await db.influencer_videos.find({"influencer_id": influencer_id}).to_list(length=None)
     for v in videos:
-        video_unit_ids.add(v["unit_id"])
-        video_ids_map[v["unit_id"]] = v["video_id"]
+        uid = v.get("unit_id")
+        if uid:
+            video_counts[uid] = video_counts.get(uid, 0) + 1
+            video_ids_map[uid] = v["video_id"]  # last one wins, just for quick-link reference
 
     # Build catalog items
     items = []
     for u in units:
-        has_vid = u["unit_id"] in video_unit_ids
+        count = video_counts.get(u["unit_id"], 0)
         items.append(CatalogItem(
             unit_id=u["unit_id"],
             merk=u["merk"],
@@ -142,7 +144,8 @@ async def get_catalog(
             warna=u["warna"],
             harga_jual=u["harga_jual"],
             kategori=u["kategori"],
-            has_video=has_vid,
+            has_video=count > 0,
+            videos_count=count,
             video_id=video_ids_map.get(u["unit_id"])
         ))
     return items
@@ -157,26 +160,23 @@ async def create_video(
     actor: str
 ) -> VideoResponse:
     """Buat video baru untuk unit. Auto-fetch metrics dari TikTok API jika platform TikTok."""
-    # Cek unit
-    unit = await db.units.find_one({"unit_id": payload.unit_id, "cabang": cabang, "status": "Tersedia"})
-    if not unit:
-        raise HTTPException(status_code=404, detail="Unit tidak ditemukan atau tidak Tersedia di cabang Anda")
+    # Cek unit HANYA kalau unit_id diisi (upload tanpa produk = general content, valid)
+    unit = None
+    unit_label = "General Content"
+    if payload.unit_id:
+        unit = await db.units.find_one({"unit_id": payload.unit_id, "cabang": cabang, "status": "Tersedia"})
+        if not unit:
+            raise HTTPException(status_code=404, detail="Unit tidak ditemukan atau tidak Tersedia di cabang Anda")
+        unit_label = f"{unit['merk']} {unit['tipe']} {unit['storage']}"
+        if unit.get("ram") and unit["ram"] != "-":
+            unit_label += f" {unit['ram']}"
 
-    # Cek sudah ada video untuk unit ini oleh influencer ini
-    existing = await db.influencer_videos.find_one({
-        "influencer_id": influencer_id,
-        "unit_id": payload.unit_id
-    })
-    if existing:
-        raise HTTPException(status_code=409, detail="Anda sudah membuat video untuk unit ini")
+    # NOTE: batasan "1 video per unit" SUDAH DIHAPUS - satu produk sekarang
+    # boleh punya banyak video/konten sekaligus, sesuai kebutuhan bisnis baru.
 
     video_id = await next_video_id(db, cabang)
     now = datetime.now(timezone.utc)
     uploaded_at = now  # default now, bisa di-override nanti
-
-    unit_label = f"{unit['merk']} {unit['tipe']} {unit['storage']}"
-    if unit.get("ram") and unit["ram"] != "-":
-        unit_label += f" {unit['ram']}"
 
     # Default metrics
     views = likes = comments = shares = 0
@@ -461,75 +461,9 @@ async def list_influencers(db: AsyncIOMotorDatabase) -> List[dict]:
         for u in users
     ]
 
-
-async def get_product_catalog(db: AsyncIOMotorDatabase, influencer_id: str) -> List[dict]:
-    """
-    Get product catalog with video counts for influencer.
-    Shows which products have content and which are "naked" (no videos).
-    
-    Returns:
-    [
-      {
-        "product_id": "PRD-001",
-        "unit_id": "UNT-20250101-0001",
-        "product_name": "iPhone 15 Pro 256GB",
-        "price": 19999000,
-        "videos_count": 3,
-        "has_content": true,
-        "needs_content": false,
-        "latest_video_date": "2026-07-10T10:30:00Z"
-      },
-      {
-        "product_id": null,  # Products without videos
-        "unit_id": "UNT-20250101-0002",
-        "product_name": "Samsung S24 128GB",
-        "price": 18999000,
-        "videos_count": 0,
-        "has_content": false,
-        "needs_content": true,
-        "latest_video_date": null
-      }
-    ]
-    """
-    # Get influencer with products array
-    influencer = await db.users.find_one({"_id": ObjectId(influencer_id)})
-    if not influencer or "products" not in influencer:
-        return []  # No products
-    
-    products = influencer.get("products", [])
-    if not products:
-        return []
-    
-    # Get video counts per product (unit_id)
-    video_counts = await db.influencer_videos.aggregate([
-        {"$match": {"influencer_id": influencer_id}},
-        {"$group": {
-            "_id": "$unit_id",
-            "count": {"$sum": 1},
-            "latest_date": {"$max": "$uploaded_at"}
-        }}
-    ]).to_list(length=None)
-    
-    # Convert to dict for easy lookup
-    count_map = {vc["_id"]: {"count": vc["count"], "latest": vc["latest_date"]} for vc in video_counts}
-    
-    # Build catalog
-    catalog = []
-    for p in products:
-        unit_id = p.get("unit_id")
-        video_info = count_map.get(unit_id, {"count": 0, "latest": None})
-        
-        catalog.append({
-            "unit_id": unit_id,
-            "product_name": f"{p.get('merk', '')} {p.get('tipe', '')} {p.get('storage', '')}".strip(),
-            "price": p.get("price", 0),
-            "videos_count": video_info["count"],
-            "has_content": video_info["count"] > 0,
-            "needs_content": video_info["count"] == 0,
-            "latest_video_date": video_info["latest"].isoformat() if video_info["latest"] else None
-        })
-    
-    # Sort: products without content first
-    catalog.sort(key=lambda x: (x["has_content"], -x["price"]))  # Naked + expensive first
-    
-    return catalog
+# NOTE: get_product_catalog() REMOVED - it read from a `user.products` array
+# field that was never populated anywhere in the codebase, so it always
+# returned an empty list. The existing get_catalog() above already computes
+# the same thing correctly from the real db.units + db.influencer_videos
+# collections (now including videos_count), so the frontend should call
+# GET /influencer/catalog instead of the removed /influencer/products/catalog.

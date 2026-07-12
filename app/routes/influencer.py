@@ -122,21 +122,10 @@ async def update_social(
 
 
 # ════════════════════════════════════════════════════════════════
-# PRODUCT CATALOG ENDPOINT (NEW - Flexible upload system)
+# NOTE: /products/catalog route REMOVED - it called a function that read
+# from a never-populated data source and always returned []. Use
+# GET /influencer/catalog instead (already includes videos_count).
 # ════════════════════════════════════════════════════════════════
-
-@router.get("/products/catalog", response_model=dict)
-async def get_product_catalog(
-    db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_influencer),
-):
-    """
-    Get product catalog with video counts for influencer.
-    Shows which products have content and which don't.
-    """
-    influencer_id = user.get("sub") or user.get("username", "")
-    catalog = await influencer_service.get_product_catalog(db, influencer_id)
-    return ok(catalog)
 
 
 # ════════════════════════════════════════════════════════════════
