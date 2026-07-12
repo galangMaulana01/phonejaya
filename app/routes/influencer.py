@@ -114,7 +114,7 @@ async def update_social(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_influencer),
 ):
-    """Update social media usernames (TikTok, Instagram, Facebook)."""
+    """Update social media usernames (TikTok and Instagram only)."""
     influencer_id = user.get("sub") or user.get("username", "")
     actor = user.get("name") or user.get("username", "")
     profile = await influencer_service.update_influencer_social(db, influencer_id, payload, actor)

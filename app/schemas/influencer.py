@@ -7,7 +7,8 @@ from datetime import datetime
 class PlatformEnum(str, Enum):
     tiktok = "tiktok"
     instagram = "instagram"
-    facebook = "facebook"
+    # Facebook support REMOVED - only TikTok and Instagram now
+    # facebook = "facebook"  # DEPRECATED
     youtube = "youtube"
 
 

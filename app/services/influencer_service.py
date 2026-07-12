@@ -18,8 +18,7 @@ from app.services.log_service import write_log
 from app.services.tiktok_scraper import fetch_video_metrics as fetch_tiktok_metrics, TikTokScraperError
 # Instagram: Still using RapidAPI (TODO: migrate to direct scraper)
 from app.services.instagram_service import fetch_post_metrics as fetch_instagram_metrics, InstagramAPIError
-# Facebook: Using facebook-scraper library
-from app.services.facebook_service import fetch_post_metrics as fetch_facebook_metrics, FacebookAPIError
+# Facebook support REMOVED - only TikTok and Instagram now
 
 
 def _fmt_video(doc: dict) -> VideoResponse:
@@ -221,21 +220,7 @@ async def create_video(
                 f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
                 cabang
             )
-    elif payload.platform.value == "facebook":
-        try:
-            metrics = await fetch_facebook_metrics(str(payload.url))
-            views = metrics.get("views", 0)
-            likes = metrics.get("likes", 0)
-            comments = metrics.get("comments", 0)
-            shares = metrics.get("shares", 0)
-            author_username = metrics.get("page_name", "")
-            author_nickname = metrics.get("page_name", "")
-        except FacebookAPIError as e:
-            await write_log(
-                db, actor, "Facebook Auto-Fetch Failed",
-                f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
-                cabang
-            )
+    # Facebook support REMOVED - only TikTok and Instagram now
 
     doc = {
         "video_id": video_id,
@@ -315,7 +300,7 @@ async def get_profile(db: AsyncIOMotorDatabase, influencer_id: str) -> Influence
 
 
 async def update_influencer_social(db: AsyncIOMotorDatabase, influencer_id: str, payload: InfluencerSocialUpdate, actor: str) -> InfluencerProfileResponse:
-    """Update social media usernames untuk influencer."""
+    """Update social media usernames for influencer (TikTok and Instagram only)."""
     try:
         oid = ObjectId(influencer_id)
     except Exception:
@@ -326,8 +311,7 @@ async def update_influencer_social(db: AsyncIOMotorDatabase, influencer_id: str,
         update_data["tiktok_username"] = payload.tiktok_username
     if payload.instagram_username is not None:
         update_data["instagram_username"] = payload.instagram_username
-    if payload.facebook_page is not None:
-        update_data["facebook_page"] = payload.facebook_page
+    # Facebook support REMOVED - facebook_page field kept for backward compatibility but not updated
     
     if not update_data:
         raise HTTPException(status_code=422, detail="Tidak ada data yang diupdate")
@@ -337,7 +321,7 @@ async def update_influencer_social(db: AsyncIOMotorDatabase, influencer_id: str,
     await db.users.update_one({"_id": oid}, {"$set": update_data})
     await write_log(
         db, actor, "Update Influencer Social",
-        f"{influencer_id} → tiktok:{payload.tiktok_username} ig:{payload.instagram_username} fb:{payload.facebook_page}",
+        f"{influencer_id} → tiktok:{payload.tiktok_username} ig:{payload.instagram_username}",
         ""
     )
     

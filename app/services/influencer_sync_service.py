@@ -1,7 +1,8 @@
 """
 Influencer sync service — runs every hour via cron.
-Fetches feeds from TikTok, Instagram, Facebook for all influencers
+Fetches feeds from TikTok and Instagram for all influencers
 and updates metrics / creates new video entries.
+NOTE: Facebook support REMOVED - only TikTok and Instagram now
 """
 import asyncio
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from bson import ObjectId
 
 from app.services.tiktok_feed_scraper import fetch_tiktok_feed, fetch_tiktok_video_metrics, TikTokScraperError
 from app.services.instagram_feed_scraper import fetch_instagram_feed, fetch_instagram_post_metrics, InstagramScraperError
-from app.services.facebook_feed_scraper import fetch_page_feed, fetch_facebook_post_metrics, FacebookFeedScraperError
+# Facebook support REMOVED - only TikTok and Instagram now
 from app.utils.id_generator import next_video_id
 from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
@@ -26,19 +27,18 @@ async def sync_all_influencers(db: AsyncIOMotorDatabase) -> Dict[str, Any]:
     stats = {
         "tiktok": {"processed": 0, "new": 0, "updated": 0, "errors": 0},
         "instagram": {"processed": 0, "new": 0, "updated": 0, "errors": 0},
-        "facebook": {"processed": 0, "new": 0, "updated": 0, "errors": 0},
         "total_influencers": 0,
         "duration_seconds": 0,
     }
     
-    # Get all active influencers with social media usernames
+    # Get all active influencers with social media usernames (TikTok and Instagram only)
     influencers = await db.users.find({
         "role": "influencer",
         "aktif": True,
         "$or": [
             {"tiktok_username": {"$ne": None, "$ne": ""}},
             {"instagram_username": {"$ne": None, "$ne": ""}},
-            {"facebook_page": {"$ne": None, "$ne": ""}},
+            # Facebook support REMOVED - facebook_page field kept for backward compatibility
         ]
     }).to_list(length=None)
     
@@ -73,15 +73,7 @@ async def sync_all_influencers(db: AsyncIOMotorDatabase) -> Dict[str, Any]:
                 await write_log(db, "SYSTEM", "Instagram Sync Error",
                                f"{influencer_name}: {str(e)[:200]}", cabang)
         
-        # Facebook sync
-        if influencer.get("facebook_page"):
-            try:
-                await _sync_facebook(db, influencer_id, influencer_name, cabang,
-                                    influencer["facebook_page"], stats)
-            except Exception as e:
-                stats["facebook"]["errors"] += 1
-                await write_log(db, "SYSTEM", "Facebook Sync Error",
-                               f"{influencer_name}: {str(e)[:200]}", cabang)
+        # Facebook sync REMOVED - only TikTok and Instagram now
     
     stats["duration_seconds"] = (datetime.now(timezone.utc) - start_time).total_seconds()
     
@@ -89,8 +81,7 @@ async def sync_all_influencers(db: AsyncIOMotorDatabase) -> Dict[str, Any]:
     await write_log(db, "SYSTEM", "Influencer Sync Complete",
         f"TikTok: {stats['tiktok']['updated']} updated, {stats['tiktok']['new']} new | "
         f"IG: {stats['instagram']['updated']} updated, {stats['instagram']['new']} new | "
-        f"FB: {stats['facebook']['updated']} updated, {stats['facebook']['new']} new | "
-        f"Errors: {stats['tiktok']['errors']+stats['instagram']['errors']+stats['facebook']['errors']}",
+        f"Errors: {stats['tiktok']['errors']+stats['instagram']['errors']}",
         ""
     )
     
@@ -159,34 +150,7 @@ async def _sync_instagram(
                                          post_data, stats, "instagram")
 
 
-async def _sync_facebook(
-    db: AsyncIOMotorDatabase,
-    influencer_id: str,
-    influencer_name: str,
-    cabang: str,
-    facebook_page: str,
-    stats: dict
-):
-    """Sync Facebook page feed for one influencer."""
-    existing_videos = {}
-    async for v in db.influencer_videos.find({"influencer_id": influencer_id, "platform": "facebook"}):
-        existing_videos[v["video_id"]] = v
-    
-    posts = await fetch_page_feed(facebook_page, count=50)
-    
-    for post_data in posts:
-        stats["facebook"]["processed"] += 1
-        post_id = post_data.get("post_id") or post_data.get("video_id")
-        if not post_id:
-            continue
-        
-        video_id = f"FB-{post_id}"
-        
-        if video_id in existing_videos:
-            await _update_video_metrics(db, existing_videos[video_id], post_data, stats, "facebook")
-        else:
-            await _create_video_from_feed(db, influencer_id, influencer_name, cabang,
-                                         post_data, stats, "facebook")
+# Facebook sync REMOVED - only TikTok and Instagram now
 
 
 async def _update_video_metrics(
@@ -212,11 +176,7 @@ async def _update_video_metrics(
         update_data["likes"] = int(feed_data.get("likes", 0))
         update_data["comments"] = int(feed_data.get("comments", 0))
         update_data["shares"] = 0  # IG doesn't expose shares
-    elif platform == "facebook":
-        update_data["views"] = int(feed_data.get("views", 0))
-        update_data["likes"] = int(feed_data.get("likes", 0))
-        update_data["comments"] = int(feed_data.get("comments", 0))
-        update_data["shares"] = int(feed_data.get("shares", 0))
+    # Facebook support REMOVED - only TikTok and Instagram now
     
     await db.influencer_videos.update_one(
         {"_id": video["_id"]},
