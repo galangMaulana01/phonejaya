@@ -1,11 +1,21 @@
 """
-Facebook service - SIMPLE PYTHON ONLY (no Node.js, no Playwright)
-Delegates to facebook_simple_scraper.py - pure Python facebook-scraper library.
+Facebook service - manual "paste link" upload path.
+Delegates to facebook_direct_scraper.py - see that file's docstring for
+the Playwright-first architecture and cookie/login handling.
+
+NOTE: A previous revision replaced this with a plain-HTTP-only
+"facebook_simple_scraper.py" that reintroduced the share-link resolution
+bug we'd already fixed (raw /share/p/ links handed directly to
+facebook-scraper) plus a regex fallback that can't work at all against
+pages where Facebook renders stats via client-side JS rather than static
+HTML. That file has been removed - this goes back to the Playwright-based
+approach, which renders pages with a real browser and doesn't have that
+class of problem.
 """
 import re
 from typing import Optional, Dict, Any
 
-from app.services.facebook_simple_scraper import (
+from app.services.facebook_direct_scraper import (
     get_post_by_url as _get_post_by_url,
     FacebookScraperError as FacebookAPIError,
 )

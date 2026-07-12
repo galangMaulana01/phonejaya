@@ -2,6 +2,10 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 60
+    },
+    "api/internal/facebook-scrape.js": {
+      "maxDuration": 60,
+      "memory": 1024
     }
   },
   "env": {
