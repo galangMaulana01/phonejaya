@@ -89,6 +89,41 @@ function cleanCachedChromium() {
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// FORCE CLEANUP ON EVERY COLD START - prevent corrupted tar cache
+// ════════════════════════════════════════════════════════════════
+
+function forceCleanTmp() {
+  const paths = [
+    '/tmp/chromium',
+    '/tmp/chromium-pack',
+    '/tmp/swiftshader',
+    '/tmp/al2023.tar.br',
+    '/tmp/al2023',
+    '/tmp/fonts.tar.br',
+    '/tmp/fonts',
+  ];
+  let cleanedCount = 0;
+  for (const p of paths) {
+    try {
+      if (fs.existsSync(p)) {
+        fs.rmSync(p, { recursive: true, force: true });
+        console.log('[facebook-scrape] Cleaned up:', p);
+        cleanedCount++;
+      }
+    } catch (e) {
+      console.warn('[facebook-scrape] Cleanup failed for', p, e.message);
+    }
+  }
+  if (cleanedCount > 0) {
+    console.log('[facebook-scrape] Cleaned', cleanedCount, 'paths from /tmp');
+  }
+}
+
+// Call ini SEKARANG, sebelum chromium.executablePath() dipanggil
+console.log('[facebook-scrape] Module initialized, cleaning /tmp...');
+forceCleanTmp();
+
 async function launchBrowser() {
   const executablePath = await chromium.executablePath(CHROMIUM_PACK_URL);
   return playwright.launch({

@@ -36,7 +36,11 @@ Env vars:
 import os
 import asyncio
 import httpx
+import logging
 from typing import Optional, List, Dict, Any
+
+
+logger = logging.getLogger(__name__)
 
 
 class FacebookScraperError(Exception):
@@ -79,14 +83,25 @@ async def _call_playwright_scraper(target_url: str) -> "tuple[Optional[Dict[str,
     """
     base_url = (os.getenv("INTERNAL_SCRAPE_BASE_URL") or "").strip().rstrip("/")
     if not base_url:
+        logger.warning("INTERNAL_SCRAPE_BASE_URL not configured - skipping Playwright path")
         return None, "INTERNAL_SCRAPE_BASE_URL not configured"
-
+    
     secret = os.getenv("INTERNAL_SCRAPE_SECRET")
     headers = {"x-internal-secret": secret} if secret else {}
-
+    
+    logger.info(
+        "Calling Playwright scraper",
+        extra={
+            "base_url": base_url,
+            "has_secret": bool(secret),
+            "target_url": target_url[:80],
+        }
+    )
+    
     last_error = "unknown error"
     async with httpx.AsyncClient(timeout=_PLAYWRIGHT_TIMEOUT_S) as client:
         for attempt in range(1, _PLAYWRIGHT_MAX_ATTEMPTS + 1):
+            logger.debug(f"Playwright attempt {attempt}/{_PLAYWRIGHT_MAX_ATTEMPTS}")
             try:
                 resp = await client.get(
                     f"{base_url}/api/internal/facebook-scrape",
@@ -95,27 +110,34 @@ async def _call_playwright_scraper(target_url: str) -> "tuple[Optional[Dict[str,
                 )
             except httpx.TimeoutException:
                 last_error = "Playwright endpoint timed out"
+                logger.warning(last_error)
                 continue
             except httpx.HTTPError as e:
                 last_error = f"Playwright endpoint unreachable: {e}"
+                logger.warning(last_error)
                 continue
-
+            
             if resp.status_code == 401:
-                return None, "Playwright endpoint rejected the request - INTERNAL_SCRAPE_SECRET mismatch"
-
+                msg = "Playwright endpoint rejected the request - INTERNAL_SCRAPE_SECRET mismatch"
+                logger.error(msg)
+                return None, msg
+            
             try:
                 payload = resp.json()
             except ValueError:
                 last_error = f"Playwright endpoint returned non-JSON (HTTP {resp.status_code})"
+                logger.warning(last_error)
                 continue
-
+            
             if resp.status_code == 200 and payload.get("success"):
+                logger.info(f"Playwright scraping succeeded: {payload.get('data', {}).get('final_url', 'unknown')}")
                 return payload["data"], None
-
+            
             last_error = (
                 f"Playwright endpoint: {payload.get('message') or payload.get('error') or f'HTTP {resp.status_code}'}"
             )
-
+            logger.warning(f"Playwright scraping failed: {last_error}")
+    
     return None, last_error
 
 
@@ -340,23 +362,29 @@ async def _resolve_share_link(url: str) -> str:
 
 async def get_post_by_url(post_url: str, post_id: Optional[str] = None) -> Dict[str, Any]:
     """Fetch a single Facebook post/video's metrics by URL."""
+    # EARLY VALIDATION - detect cookie issue before calling Playwright
+    has_session = _ensure_cookies_configured()
+    if not has_session:
+        logger.warning("No Facebook session configured (FACEBOOK_C_USER/XS missing) - Playwright scraping will be limited to public posts only")
+    
     # PRIMARY: real headless browser via the sibling Playwright function.
     # A real browser follows share-link redirects/JS bounces on its own,
     # so no manual URL resolution is needed on this path.
     playwright_result, playwright_error = await _call_playwright_scraper(post_url)
     if playwright_result is not None:
         return _playwright_result_to_dict(playwright_result)
-
+    
     # FALLBACK: old plain-HTTP path, reached whenever the Playwright path
     # didn't succeed for any reason (not configured, unreachable, timed
     # out, or couldn't parse the page).
-    has_session = _ensure_cookies_configured()
+    logger.info("Falling back to facebook-scraper library (Playwright path failed)")
     resolved_url = await _resolve_share_link(post_url)
     try:
         result = await asyncio.to_thread(_scrape_post_sync, resolved_url, post_id, has_session, post_url)
         return result
     except FacebookScraperError as e:
         if playwright_error:
+            logger.error(f"Both scraping methods failed. Playwright: {playwright_error}. Fallback: {e}")
             raise FacebookScraperError(
                 f"Both scraping methods failed. Playwright: {playwright_error}. "
                 f"Fallback: {e}",
@@ -364,6 +392,7 @@ async def get_post_by_url(post_url: str, post_id: Optional[str] = None) -> Dict[
             )
         raise
     except Exception as e:
+        logger.exception(f"Facebook scrape failed with unexpected error: {e}")
         raise FacebookScraperError(f"Facebook scrape failed: {str(e)[:300]}", 502)
 
 
