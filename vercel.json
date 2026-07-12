@@ -4,14 +4,28 @@
     {
       "src": "api/index.py",
       "use": "@vercel/python"
+    },
+    {
+      "src": "api/internal/facebook-scrape.js",
+      "use": "@vercel/node"
     }
   ],
   "routes": [
+    {
+      "src": "/api/internal/facebook-scrape",
+      "dest": "api/internal/facebook-scrape.js"
+    },
     {
       "src": "/(.*)",
       "dest": "api/index.py"
     }
   ],
+  "functions": {
+    "api/internal/facebook-scrape.js": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  },
   "env": {
     "PYTHONPATH": "/var/task"
   }

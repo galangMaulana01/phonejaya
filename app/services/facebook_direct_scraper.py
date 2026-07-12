@@ -3,40 +3,39 @@ Facebook Direct Scraper - core logic shared by both:
   - facebook_service.py       (manual "paste link" upload path)
   - facebook_feed_scraper.py  (cron auto-detect from a page's feed)
 
-We still use the `facebook-scraper` pip package (kevinzg) as the actual
-HTML-parsing engine - for single-post fetch it targets m.facebook.com
-(lightweight mobile web, no JS challenge), and mbasic.facebook.com for
-some feed pagination. Its parsing logic has been refined over years, so
-we reuse it rather than reinventing that part from scratch.
+ARCHITECTURE (updated after repeated share-link/redirect/tracking-param
+failures with plain HTTP scraping):
 
-What THIS file adds on top of the raw library (this is the part that was
-missing before):
-  1. Login/cookie support (`c_user` + `xs` cookies), via
-     `facebook_scraper.set_cookies()`. Some pages/videos increasingly
-     require a logged-in session - without this, those requests fail
-     (previously nothing handled that case explicitly).
-  2. Same non-ASCII cookie sanity check we added for Instagram's
-     sessionid, so a mangled copy-paste fails with a clear message
-     instead of a raw UnicodeEncodeError deep in the request layer.
-  3. Share-link resolution (`_resolve_share_link`): Facebook's universal
-     share links (/share/p/, /share/v/, /share/r/, fb.watch/...) are
-     bounce pages, not the real post - facebook-scraper's parser looks
-     for elements that only exist on the actual permalink page, so a
-     bounce URL always came back as "no posts found" even for a perfectly
-     valid, public post. We now resolve to the canonical URL first.
-  4. A single source of truth: both the manual-link and feed-based
-     callers go through this one module instead of two independent
-     copies of similar scraping code that can drift apart.
+PRIMARY: a real headless browser (Playwright + serverless Chromium),
+running as a separate Vercel Node.js function at
+api/internal/facebook-scrape.js, called over HTTP from here. A real
+browser renders the page like an actual visitor - it follows JS/meta
+redirects, tracking-param bounce pages, and DOM changes automatically,
+which is exactly the class of problem that kept breaking the plain-HTTP
+approach (share links resolving to different URL shapes each time,
+extra query params changing which page variant Facebook serves, etc).
+
+FALLBACK: the `facebook-scraper` pip package (kevinzg), doing plain HTTP
++ HTML parsing against m.facebook.com/mbasic.facebook.com. Kept as a
+second attempt in case the Playwright function is unreachable or erroring,
+for extra resilience - not because it's preferred.
+
+Both paths share the same cookie handling: FACEBOOK_C_USER / FACEBOOK_XS
+from a logged-in throwaway account, with the same non-ASCII sanity check
+we added after the Instagram sessionid incident.
 
 Env vars:
-  FACEBOOK_C_USER, FACEBOOK_XS - cookies from a logged-in Facebook account
-  (use a spare/throwaway account, not your main one). Both are required
-  together - Facebook's login check needs both to consider a session valid.
-  Get them from DevTools > Application > Cookies > facebook.com, same way
-  as Instagram's sessionid.
+  FACEBOOK_C_USER, FACEBOOK_XS       - session cookies (see facebook_service.py docstring)
+  INTERNAL_SCRAPE_BASE_URL           - this deployment's own base URL, e.g.
+                                       https://phonejaya.vercel.app, used to
+                                       call the sibling Playwright function
+  INTERNAL_SCRAPE_SECRET             - shared secret sent as x-internal-secret
+                                       header; must match the same env var
+                                       set on the Node function
 """
 import os
 import asyncio
+import httpx
 from typing import Optional, List, Dict, Any
 
 
@@ -61,6 +60,82 @@ def _validate_ascii(name: str, value: str) -> None:
             "(quotes, spaces, other text) gets included.",
             400,
         )
+
+
+_PLAYWRIGHT_TIMEOUT_S = 55.0
+_PLAYWRIGHT_MAX_ATTEMPTS = 2
+
+
+async def _call_playwright_scraper(target_url: str) -> "tuple[Optional[Dict[str, Any]], Optional[str]]":
+    """
+    Call the sibling Vercel Node.js function that does real-browser scraping.
+
+    Always returns (result, error_reason) - never raises - so the caller can
+    fall back to the old HTTP-based path on ANY failure (auth misconfigured,
+    unreachable, timeout, or the page just not being parseable), maximizing
+    overall stability. error_reason is kept around so that if the fallback
+    ALSO fails, we can report both failure reasons together instead of
+    losing the more informative one.
+    """
+    base_url = (os.getenv("INTERNAL_SCRAPE_BASE_URL") or "").strip().rstrip("/")
+    if not base_url:
+        return None, "INTERNAL_SCRAPE_BASE_URL not configured"
+
+    secret = os.getenv("INTERNAL_SCRAPE_SECRET")
+    headers = {"x-internal-secret": secret} if secret else {}
+
+    last_error = "unknown error"
+    async with httpx.AsyncClient(timeout=_PLAYWRIGHT_TIMEOUT_S) as client:
+        for attempt in range(1, _PLAYWRIGHT_MAX_ATTEMPTS + 1):
+            try:
+                resp = await client.get(
+                    f"{base_url}/api/internal/facebook-scrape",
+                    params={"url": target_url},
+                    headers=headers,
+                )
+            except httpx.TimeoutException:
+                last_error = "Playwright endpoint timed out"
+                continue
+            except httpx.HTTPError as e:
+                last_error = f"Playwright endpoint unreachable: {e}"
+                continue
+
+            if resp.status_code == 401:
+                return None, "Playwright endpoint rejected the request - INTERNAL_SCRAPE_SECRET mismatch"
+
+            try:
+                payload = resp.json()
+            except ValueError:
+                last_error = f"Playwright endpoint returned non-JSON (HTTP {resp.status_code})"
+                continue
+
+            if resp.status_code == 200 and payload.get("success"):
+                return payload["data"], None
+
+            last_error = (
+                f"Playwright endpoint: {payload.get('message') or payload.get('error') or f'HTTP {resp.status_code}'}"
+            )
+
+    return None, last_error
+
+
+def _playwright_result_to_dict(result: dict) -> Dict[str, Any]:
+    return {
+        "post_id": "",
+        "page_name": "",
+        "page_id": "",
+        "likes": int(result.get("likes", 0) or 0),
+        "comments": int(result.get("comments", 0) or 0),
+        "shares": int(result.get("shares", 0) or 0),
+        "views": int(result.get("views", 0) or 0),
+        "reactions": {},
+        "text": (result.get("description") or result.get("title") or "")[:500],
+        "is_video": bool(result.get("is_video")),
+        "video_id": "",
+        "post_url": result.get("final_url", ""),
+        "thumbnail": "",
+        "time": "",
+    }
 
 
 def _ensure_cookies_configured() -> bool:
@@ -265,12 +340,28 @@ async def _resolve_share_link(url: str) -> str:
 
 async def get_post_by_url(post_url: str, post_id: Optional[str] = None) -> Dict[str, Any]:
     """Fetch a single Facebook post/video's metrics by URL."""
+    # PRIMARY: real headless browser via the sibling Playwright function.
+    # A real browser follows share-link redirects/JS bounces on its own,
+    # so no manual URL resolution is needed on this path.
+    playwright_result, playwright_error = await _call_playwright_scraper(post_url)
+    if playwright_result is not None:
+        return _playwright_result_to_dict(playwright_result)
+
+    # FALLBACK: old plain-HTTP path, reached whenever the Playwright path
+    # didn't succeed for any reason (not configured, unreachable, timed
+    # out, or couldn't parse the page).
     has_session = _ensure_cookies_configured()
     resolved_url = await _resolve_share_link(post_url)
     try:
         result = await asyncio.to_thread(_scrape_post_sync, resolved_url, post_id, has_session, post_url)
         return result
-    except FacebookScraperError:
+    except FacebookScraperError as e:
+        if playwright_error:
+            raise FacebookScraperError(
+                f"Both scraping methods failed. Playwright: {playwright_error}. "
+                f"Fallback: {e}",
+                e.status_code,
+            )
         raise
     except Exception as e:
         raise FacebookScraperError(f"Facebook scrape failed: {str(e)[:300]}", 502)
