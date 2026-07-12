@@ -1,12 +1,11 @@
 """
-Facebook service - manual "paste link" upload path.
-Delegates to facebook_direct_scraper.py - see that file's docstring for
-the cookie/login handling this adds on top of the facebook-scraper library.
+Facebook service - SIMPLE PYTHON ONLY (no Node.js, no Playwright)
+Delegates to facebook_simple_scraper.py - pure Python facebook-scraper library.
 """
 import re
 from typing import Optional, Dict, Any
 
-from app.services.facebook_direct_scraper import (
+from app.services.facebook_simple_scraper import (
     get_post_by_url as _get_post_by_url,
     FacebookScraperError as FacebookAPIError,
 )
