@@ -35,7 +35,6 @@ def _fmt_video(doc: dict) -> VideoResponse:
         views=doc.get("views", 0),
         likes=doc.get("likes", 0),
         comments=doc.get("comments", 0),
-        shares=doc.get("shares", 0),
         uploaded_at=fmt_waktu(doc.get("uploaded_at", datetime.now(timezone.utc))),
         updated_at=fmt_waktu(doc.get("updated_at", datetime.now(timezone.utc))),
     )
@@ -179,7 +178,7 @@ async def create_video(
     uploaded_at = now  # default now, bisa di-override nanti
 
     # Default metrics
-    views = likes = comments = shares = 0
+    views = likes = comments = 0
     author_username = ""
     author_nickname = ""
 
@@ -190,7 +189,6 @@ async def create_video(
             views = metrics.get("views", 0)
             likes = metrics.get("likes", 0)
             comments = metrics.get("comments", 0)
-            shares = metrics.get("shares", 0)
             author_username = metrics.get("author_username", "")
             author_nickname = metrics.get("author_nickname", "")
             await write_log(
@@ -211,7 +209,6 @@ async def create_video(
             views = metrics.get("views", 0)
             likes = metrics.get("likes", 0)
             comments = metrics.get("comments", 0)
-            shares = 0  # Instagram doesn't expose shares via public API
             author_username = metrics.get("owner", {}).get("username", "")
             author_nickname = metrics.get("owner", {}).get("full_name", "")
         except InstagramAPIError as e:
@@ -234,7 +231,6 @@ async def create_video(
         "views": int(views) if views else 0,
         "likes": int(likes) if likes else 0,
         "comments": int(comments) if comments else 0,
-        "shares": int(shares) if shares else 0,
         "product_id": str(payload.product_id) if payload.product_id else None,  # NEW: Optional product linkage
         "uploaded_at": uploaded_at,
         "updated_at": now,

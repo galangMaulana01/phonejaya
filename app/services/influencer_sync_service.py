@@ -170,12 +170,10 @@ async def _update_video_metrics(
         update_data["views"] = int(feed_data.get("views", 0))
         update_data["likes"] = int(feed_data.get("likes", 0))
         update_data["comments"] = int(feed_data.get("comments", 0))
-        update_data["shares"] = int(feed_data.get("shares", 0))
     elif platform == "instagram":
         update_data["views"] = int(feed_data.get("views", 0))
         update_data["likes"] = int(feed_data.get("likes", 0))
         update_data["comments"] = int(feed_data.get("comments", 0))
-        update_data["shares"] = 0  # IG doesn't expose shares
     # Facebook support REMOVED - only TikTok and Instagram now
     
     await db.influencer_videos.update_one(
@@ -238,7 +236,6 @@ async def _create_video_from_feed(
         "views": feed_data.get("views", 0),
         "likes": feed_data.get("likes", 0),
         "comments": feed_data.get("comments", 0),
-        "shares": feed_data.get("shares", 0),
         "author_username": feed_data.get("author_username", ""),
         "author_nickname": feed_data.get("author_nickname", feed_data.get("author_full_name", "")),
         "uploaded_at": now,

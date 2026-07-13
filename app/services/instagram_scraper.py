@@ -64,9 +64,6 @@ class InstagramPost:
     is_video: bool
     author_username: str
     author_full_name: str
-    shares: int = 0  # Instagram does not expose share counts anywhere (official
-                     # API or otherwise) - always 0, this is a platform
-                     # limitation, not a scraping bug.
 
 
 def extract_shortcode(url: str) -> Optional[str]:
@@ -415,7 +412,6 @@ async def fetch_post_metrics(post_url: str) -> Dict[str, Any]:
             "views": post.views,
             "likes": post.likes,
             "comments": post.comments,
-            "shares": post.shares,
             "is_video": post.is_video,
             "caption": post.caption,
             "taken_at": post.taken_at,

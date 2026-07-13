@@ -15,6 +15,7 @@ from app.schemas.influencer import (
 from app.schemas.common import ok
 from app.services import influencer_service
 from app.middlewares.auth import require_influencer, require_influencer_or_owner
+from app.services.log_service import write_log
 
 router = APIRouter(prefix="/influencer", tags=["Influencer"])
 
@@ -97,12 +98,59 @@ async def list_videos(
     return ok([item.model_dump() for item in items])
 
 
+@router.get("/log", response_model=dict)
+async def list_log(
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_influencer),
+):
+    """List log aktivitas influencer."""
+    influencer_id = user.get("sub") or user.get("username")
+    cabang = user.get("cabang")
+    
+    # Build query
+    query = {"cabang": cabang}
+    
+    # Date filter
+    if date_from and date_to:
+        try:
+            df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            query["waktu"] = {"$gte": df, "$lte": dt}
+        except ValueError:
+            pass
+    
+    # Get logs, limit 100
+    logs = await db.log.find(query).sort("waktu", -1).limit(100).to_list(None)
+    
+    # Format response
+    result = []
+    for doc in logs:
+        # Filter only influencer-related logs for this cabang
+        aksi = doc.get("aksi", "")
+        if any(x in aksi for x in ["Video", "Influencer", "TikTok", "Instagram", "Auto-Fetch", "Sync", "Upload"]):
+            result.append({
+                "waktu": doc.get("waktu", "").isoformat() if isinstance(doc.get("waktu"), datetime) else str(doc.get("waktu", "")),
+                "user": doc.get("user", ""),
+                "aksi": aksi,
+                "detail": doc.get("detail", ""),
+                "cabang": doc.get("cabang", ""),
+            })
+    
+    return ok(result)
+
+
+# ════════════════════════════════════════════════════════════════
+# DEPRECATED ENDPOINTS (no longer used in frontend)
+# ════════════════════════════════════════════════════════════════
+
 @router.get("/profile", response_model=dict)
 async def get_profile(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_influencer),
 ):
-    """Profil influencer (basic info + social media)."""
+    """Profil influencer (basic info + social media). DEPRECATED - social profile page removed."""
     influencer_id = user.get("sub") or user.get("username", "")
     profile = await influencer_service.get_profile(db, influencer_id)
     return ok(profile.model_dump())
@@ -114,18 +162,11 @@ async def update_social(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_influencer),
 ):
-    """Update social media usernames (TikTok and Instagram only)."""
+    """Update social media usernames (TikTok and Instagram only). DEPRECATED - social profile page removed."""
     influencer_id = user.get("sub") or user.get("username", "")
     actor = user.get("name") or user.get("username", "")
     profile = await influencer_service.update_influencer_social(db, influencer_id, payload, actor)
     return ok(profile.model_dump(), message="Social media updated")
-
-
-# ════════════════════════════════════════════════════════════════
-# NOTE: /products/catalog route REMOVED - it called a function that read
-# from a never-populated data source and always returned []. Use
-# GET /influencer/catalog instead (already includes videos_count).
-# ════════════════════════════════════════════════════════════════
 
 
 # ════════════════════════════════════════════════════════════════

@@ -51,7 +51,6 @@ class VideoResponse(BaseModel):
     views: int
     likes: int
     comments: int
-    shares: int
     uploaded_at: str
     updated_at: str
 

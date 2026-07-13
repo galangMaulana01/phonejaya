@@ -44,14 +44,13 @@ class TikTokScraperError(Exception):
 
 
 @dataclass
+@dataclass
 class TikTokVideo:
-    """TikTok video data structure."""
     video_id: str
     url: str
     views: int
     likes: int
     comments: int
-    shares: int
     caption: str
     create_time: int
     author_username: str
@@ -360,7 +359,6 @@ class TikTokDirectScraper:
                 views=int(stats.get("playCount", 0) or 0),
                 likes=int(stats.get("diggCount", 0) or 0),
                 comments=int(stats.get("commentCount", 0) or 0),
-                shares=int(stats.get("shareCount", 0) or 0),
                 caption=caption,
                 create_time=int(create_time) if create_time else 0,
                 author_username=author_username,
@@ -411,7 +409,6 @@ async def fetch_video_metrics(video_url: str) -> Dict[str, Any]:
             "views": video.views,
             "likes": video.likes,
             "comments": video.comments,
-            "shares": video.shares,
             "author_username": video.author_username,
             "author_nickname": video.author_nickname,
             "url": video.url,
@@ -431,7 +428,6 @@ async def fetch_user_feed(username: str, count: int = 30) -> List[Dict[str, Any]
                 "views": v.views,
                 "likes": v.likes,
                 "comments": v.comments,
-                "shares": v.shares,
                 "caption": v.caption,
                 "author_username": v.author_username,
                 "author_nickname": v.author_nickname,
