@@ -5,7 +5,7 @@ from app.config.database import get_db
 from app.schemas.request_sparepart import RequestSparepartCreateRequest, RequestSparepartResponseRequest
 from app.schemas.common import ok
 from app.services.request_sparepart_service import list_requests, create_request, respond_request
-from app.middlewares.auth import require_kasir_or_owner, require_kepala_or_owner
+from app.middlewares.auth import require_kasir_teknisi_or_owner, require_kepala_or_owner
 
 router = APIRouter(prefix="/request-sparepart", tags=["Request Sparepart"])
 
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/request-sparepart", tags=["Request Sparepart"])
 async def get_requests(
     status: Optional[str] = Query(None),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    user:   dict = Depends(require_kasir_or_owner),
+    user:   dict = Depends(require_kasir_teknisi_or_owner),
 ):
     cab = None if user.get("role") == "owner" else user.get("cabang")
     items = await list_requests(db, cabang=cab, status=status)
@@ -25,7 +25,7 @@ async def get_requests(
 async def buat_request(
     body: RequestSparepartCreateRequest,
     db:   AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_or_owner),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     body.cabang = user.get("cabang", body.cabang)
     item = await create_request(db, payload=body, actor=user.get("name", user.get("username","")))

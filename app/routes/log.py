@@ -4,7 +4,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.database import get_db
 from app.schemas.common import ok
 from app.utils.formatters import fmt_waktu
-from app.middlewares.auth import require_kepala_or_owner
+from app.middlewares.auth import require_kepala_or_owner, require_teknisi_or_owner
 
 router = APIRouter(prefix="/log", tags=["Log"])
 
@@ -15,15 +15,23 @@ async def list_log(
     limit:     int = Query(100, ge=1, le=500),
     date_from: Optional[str] = Query(None),
     date_to:   Optional[str] = Query(None),
+    role_filter: Optional[str] = Query(None),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    user:   dict = Depends(require_kepala_or_owner),
+    user:   dict = Depends(require_teknisi_or_owner),
 ):
     query = {}
-    # Owner bisa filter bebas, kepala_cabang paksa cabangnya
+    # Owner/kepala_cabang bisa filter bebas, teknisi hanya lihat log sendiri
     if user.get("role") == "owner":
         if cabang: query["cabang"] = cabang
-    else:
+    elif user.get("role") == "kepala_cabang":
         query["cabang"] = user.get("cabang")
+    elif user.get("role") == "teknisi":
+        # Teknisi hanya bisa lihat log dengan user = nama mereka
+        query["user"] = user.get("name", user.get("username", ""))
+    
+    # Role filter untuk spesifik aksi (teknisi, service, dll)
+    if role_filter and user.get("role") in ("owner", "kepala_cabang"):
+        query["user"] = role_filter
 
     if date_from or date_to:
         from datetime import datetime, timezone

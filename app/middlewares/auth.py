@@ -26,8 +26,9 @@ def require_kepala_or_owner(current_user: dict = Depends(get_current_user)) -> d
     return current_user
 
 
-def require_kasir_or_owner(current_user: dict = Depends(get_current_user)) -> dict:
-    if current_user.get("role") not in ("owner", "kasir", "kepala_cabang"):
+def require_kasir_teknisi_or_owner(current_user: dict = Depends(get_current_user)) -> dict:
+    """Kasir, Teknisi, Kepala Cabang, dan Owner bisa akses."""
+    if current_user.get("role") not in ("owner", "kepala_cabang", "kasir", "teknisi"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
     return current_user
 
