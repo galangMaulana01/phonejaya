@@ -15,8 +15,13 @@ async def login(body: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
 
 
 @router.get("/me")
-async def me(current_user: dict = Depends(get_current_user)):
+async def me(current_user: dict = Depends(get_current_user), db = Depends(get_db)):
     # JWT payload pakai "sub" untuk id, bukan "_id"
+    # Lookup foto_profil_url from karyawan collection
+    foto_profil_url = None
+    karyawan = await db.karyawan.find_one({"username": current_user.get("username", "")})
+    if karyawan:
+        foto_profil_url = karyawan.get("foto_profil_url")
     return ok({
         "id":       current_user.get("sub", ""),
         "username": current_user.get("username", ""),
@@ -24,4 +29,5 @@ async def me(current_user: dict = Depends(get_current_user)):
         "role":     current_user.get("role", ""),
         "cabang":   current_user.get("cabang", ""),
         "aktif":    current_user.get("aktif", True),
+        "foto_profil_url": foto_profil_url,
     })

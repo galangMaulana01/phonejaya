@@ -5,7 +5,7 @@ from app.config.database import get_db
 from app.schemas.transaksi import TransaksiCreateRequest, TransaksiSparepartRequest
 from app.schemas.common import ok
 from app.services import transaksi_service
-from app.middlewares.auth import require_kepala_or_owner, require_kasir_or_owner
+from app.middlewares.auth import require_kepala_or_owner, require_kasir_teknisi_or_owner, require_any
 
 router = APIRouter(prefix="/transaksi", tags=["Transaksi"])
 
@@ -28,7 +28,7 @@ async def list_transaksi(
 async def create_transaksi(
     body: TransaksiCreateRequest,
     db:   AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_or_owner),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     trx = await transaksi_service.create_transaksi(
         db, payload=body,
@@ -39,12 +39,31 @@ async def create_transaksi(
     return ok(trx.model_dump(), message=f"Transaksi {trx.trx_id} berhasil dicatat")
 
 
+@router.get("/{trx_id}/detail")
+async def transaksi_detail(
+    trx_id: str,
+    db:   AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_any),
+):
+    """Return transaction with financial breakdown (harga_modal, harga_jual, profit, margin)."""
+    from fastapi import HTTPException
+    doc = await db.transaksi.find_one({"trx_id": trx_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Transaksi {trx_id} tidak ditemukan")
+    trx = transaksi_service._fmt(doc)
+    data = trx.model_dump()
+    # Calculate margin percentage
+    margin = round((data["profit"] / data["harga_jual"]) * 100, 1) if data["harga_jual"] else 0
+    data["margin_pct"] = margin
+    return ok(data)
+
+
 # Legacy endpoint — tetap dipertahankan untuk backward compat
 @router.post("/sparepart", status_code=201)
 async def create_transaksi_sparepart(
     body: TransaksiSparepartRequest,
     db:   AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_or_owner),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     trx = await transaksi_service.create_transaksi_sparepart(
         db, payload=body,

@@ -30,6 +30,8 @@ def _fmt(doc: dict) -> ServiceResponse:
         estimasi_selesai=doc.get("estimasi_selesai"),
         created_at=fmt_waktu(doc["created_at"]) if doc.get("created_at") else "",
         updated_at=fmt_waktu(doc["updated_at"]) if doc.get("updated_at") else None,
+        foto_before_urls=doc.get("foto_before_urls", []),
+        foto_after_urls=doc.get("foto_after_urls", []),
     )
 
 
@@ -138,6 +140,12 @@ async def update_service(
 
     if payload.catatan_kerusakan is not None:
         updates["catatan_kerusakan"] = payload.catatan_kerusakan
+
+    if payload.foto_before_urls is not None:
+        updates["foto_before_urls"] = payload.foto_before_urls
+
+    if payload.foto_after_urls is not None:
+        updates["foto_after_urls"] = payload.foto_after_urls
 
     if payload.estimasi_selesai:
         updates["estimasi_selesai"] = payload.estimasi_selesai

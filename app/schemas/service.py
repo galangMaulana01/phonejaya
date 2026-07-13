@@ -40,6 +40,8 @@ class ServiceUpdateRequest(BaseModel):
     catatan_kerusakan: Optional[str] = None
     teknisi:           Optional[str] = None
     estimasi_selesai:  Optional[str] = None
+    foto_before_urls:  Optional[List[str]] = None
+    foto_after_urls:   Optional[List[str]] = None
 
 
 class ServiceResponse(BaseModel):
@@ -58,3 +60,5 @@ class ServiceResponse(BaseModel):
     estimasi_selesai: Optional[str] = None
     created_at:       str
     updated_at:       Optional[str] = None
+    foto_before_urls: List[str] = []
+    foto_after_urls:  List[str] = []

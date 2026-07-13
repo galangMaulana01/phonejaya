@@ -6,7 +6,7 @@ from app.config.database import get_db
 from app.schemas.unit import UnitCreateRequest, ApproveRepairRequest
 from app.schemas.common import ok
 from app.services import unit_service
-from app.middlewares.auth import require_kasir_or_owner, require_kepala_or_owner, require_any
+from app.middlewares.auth import require_kasir_teknisi_or_owner, require_kepala_or_owner, require_any
 
 router = APIRouter(prefix="/units", tags=["Units"])
 
@@ -40,7 +40,7 @@ async def list_units(
 async def create_unit(
     body: UnitCreateRequest,
     db:   AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_or_owner),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     unit = await unit_service.create_unit(db, body, actor=user.get("name", user.get("username", "")))
     msg = (
@@ -56,7 +56,26 @@ async def approve_repair(
     unit_id: str,
     body:    ApproveRepairRequest,
     db:      AsyncIOMotorDatabase = Depends(get_db),
-    user:    dict = Depends(require_kasir_or_owner),
+    user:    dict = Depends(require_kasir_teknisi_or_owner),
 ):
     unit = await unit_service.approve_repair(db, unit_id, body, actor=user.get("name", user.get("username", "")))
     return ok(unit.model_dump(), message=f"Unit {unit_id} disetujui → masuk stok Tersedia")
+
+
+@router.get("/{unit_id}/detail")
+async def unit_detail(
+    unit_id: str,
+    db:   AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_any),
+):
+    """Return full unit info including photo URL."""
+    from fastapi import HTTPException
+    doc = await db.units.find_one({"unit_id": unit_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Unit {unit_id} tidak ditemukan")
+    unit = unit_service._fmt(doc)
+    data = unit.model_dump()
+    # Hide harga_modal from teknisi
+    if user.get("role") == "teknisi":
+        data.pop("harga_modal", None)
+    return ok(data)

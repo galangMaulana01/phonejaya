@@ -46,6 +46,7 @@ class UnitCreateRequest(BaseModel):
     cabang:        str = "JYP"
     keluhan:       str = ""
     sparepart_items: List[SparepartItem] = []
+    foto_url:       Optional[str] = None
 
     @field_validator("merk", "tipe")
     @classmethod
@@ -104,3 +105,4 @@ class UnitResponse(BaseModel):
     tgl_terjual:   Optional[str] = None
     service_id:    Optional[str] = None
     created_by:    str = ""
+    foto_url:       Optional[str] = None

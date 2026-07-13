@@ -13,6 +13,7 @@ class TransaksiCreateRequest(BaseModel):
     customer_kontak: str = ""
     poin_dipakai: int = 0
     sparepart_items: Optional[List["SparepartTrxItem"]] = None  # list sparepart yang dibeli
+    foto_serah_terima: Optional[str] = None
 
 
 class SparepartTrxItem(BaseModel):
@@ -50,6 +51,7 @@ class TransaksiResponse(BaseModel):
     poin_dapat: int = 0
     cabang:       str
     sp_items: Optional[list] = None
+    foto_serah_terima: Optional[str] = None
 
 
 # Fix forward reference

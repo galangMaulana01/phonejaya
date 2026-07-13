@@ -12,6 +12,7 @@ def _fmt(doc: dict) -> KaryawanResponse:
         id=str(doc["_id"]), nama=doc["nama"], username=doc["username"],
         jabatan=doc["jabatan"], cabang=doc["cabang"], gaji=doc["gaji"],
         aktif=doc.get("aktif", True), bergabung=doc.get("bergabung",""),
+        foto_profil_url=doc.get("foto_profil_url"),
     )
 
 
@@ -43,6 +44,7 @@ async def create_karyawan(db, payload: KaryawanCreateRequest, actor: str) -> Kar
         "gaji": payload.gaji, "aktif": True,
         "bergabung": date.today().isoformat(),
         "created_at": now,
+        "foto_profil_url": payload.foto_profil_url,
     }
     result = await db.karyawan.insert_one(doc)
     doc["_id"] = result.inserted_id

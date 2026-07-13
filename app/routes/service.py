@@ -7,7 +7,7 @@ from app.config.database import get_db
 from app.schemas.service import ServiceUpdateRequest
 from app.schemas.common import ok
 from app.services import service_service
-from app.middlewares.auth import require_teknisi_or_owner, require_any, require_kasir_or_owner, require_kepala_or_owner
+from app.middlewares.auth import require_teknisi_or_owner, require_any, require_kasir_teknisi_or_owner, require_kepala_or_owner
 
 router = APIRouter(prefix="/service", tags=["Service"])
 
@@ -41,7 +41,7 @@ async def list_service(
 async def pending_approval(
     cabang: Optional[str] = Query(None),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    user:   dict = Depends(require_kasir_or_owner),
+    user:   dict = Depends(require_kasir_teknisi_or_owner),
 ):
     cab = _cabang_filter(user, cabang)
     items = await service_service.list_service(db, cabang=cab, status="Selesai", limit=500)
@@ -72,6 +72,28 @@ async def update_service(
         user_cabang=user.get("cabang", ""),
     )
     return ok(item.model_dump(), message="Service berhasil diupdate")
+
+
+@router.get("/{service_id}/detail")
+async def service_detail(
+    service_id: str,
+    db:    AsyncIOMotorDatabase = Depends(get_db),
+    user:  dict = Depends(require_any),
+):
+    """Return service with before/after photos and timeline."""
+    from fastapi import HTTPException
+    doc = await db.service.find_one({"service_id": service_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
+    item = service_service._fmt(doc)
+    data = item.model_dump()
+    # Add timeline from status history if available
+    data["timeline"] = []
+    if doc.get("created_at"):
+        data["timeline"].append({"event": "Dibuat", "waktu": str(doc["created_at"])})
+    if doc.get("updated_at"):
+        data["timeline"].append({"event": f"Status → {doc.get('status', '')}", "waktu": str(doc["updated_at"])})
+    return ok(data)
 
 
 @router.post("/{service_id}/foto")

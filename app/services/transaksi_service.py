@@ -30,6 +30,7 @@ def _fmt(doc: dict) -> TransaksiResponse:
         poin_dapat    = doc.get("poin_dapat", 0),
         cabang        = doc["cabang"],
         sp_items      = doc.get("sp_items"),
+        foto_serah_terima=doc.get("foto_serah_terima"),
     )
 
 
@@ -195,6 +196,7 @@ async def create_transaksi(
         "customer_kontak": payload.customer_kontak.strip() if payload.customer_kontak else "",
         "customer_id":    customer_id,
         "sp_items":      sp_items_doc if has_sp else None,
+        "foto_serah_terima": payload.foto_serah_terima,
     }
     result = await db.transaksi.insert_one(doc)
     doc["_id"] = result.inserted_id

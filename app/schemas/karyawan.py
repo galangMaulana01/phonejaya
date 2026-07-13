@@ -10,6 +10,7 @@ class KaryawanCreateRequest(BaseModel):
     cabang:   str = "JYP"
     gaji:     int = 0
     password: str = ""
+    foto_profil_url: Optional[str] = None
 
     @field_validator("nama")
     @classmethod
@@ -43,6 +44,7 @@ class KaryawanResponse(BaseModel):
     gaji: int
     aktif: bool
     bergabung: str
+    foto_profil_url: Optional[str] = None
 
 
 class ResetPasswordRequest(BaseModel):

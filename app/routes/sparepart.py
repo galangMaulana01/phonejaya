@@ -5,7 +5,7 @@ from app.config.database import get_db
 from app.schemas.sparepart import SparepartCreateRequest, SparepartUpdateStokRequest
 from app.schemas.common import ok
 from app.services import sparepart as sparepart_service
-from app.middlewares.auth import require_kasir_or_owner, require_kepala_or_owner
+from app.middlewares.auth import require_kasir_teknisi_or_owner, require_kepala_or_owner
 
 router = APIRouter(prefix="/sparepart", tags=["Sparepart"])
 
@@ -15,7 +15,7 @@ async def list_sparepart(
     cabang:   Optional[str] = Query(None),
     kategori: Optional[str] = Query(None),
     db:       AsyncIOMotorDatabase = Depends(get_db),
-    user:     dict = Depends(require_kasir_or_owner),
+    user:     dict = Depends(require_kasir_teknisi_or_owner),
 ):
     cab = cabang if user.get("role") == "owner" else user.get("cabang")
     items = await sparepart_service.list_sparepart(db, cabang=cab, kategori=kategori)

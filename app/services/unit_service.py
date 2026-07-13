@@ -44,6 +44,7 @@ def _fmt(doc: dict) -> UnitResponse:
         tgl_masuk=fmt_waktu(doc["created_at"]) if doc.get("created_at") else "",
         tgl_terjual=fmt_waktu(doc["tgl_terjual"]) if doc.get("tgl_terjual") else None,
         service_id=doc.get("service_id"),
+        foto_url=doc.get("foto_url"),
     )
 
 
@@ -145,6 +146,7 @@ async def create_unit(
         "created_by":    actor,
         "tgl_terjual":   None,
         "service_id":    None,
+        "foto_url":      payload.foto_url,
     }
 
     result = await db.units.insert_one(doc)
@@ -170,6 +172,8 @@ async def create_unit(
             "status":           "Antrian",
             "teknisi":          "",
             "foto_urls":        [],
+            "foto_before_urls": [],
+            "foto_after_urls":  [],
             "cabang":           payload.cabang,
             "sparepart_items":  [{"sp_id": s.sp_id, "jumlah": s.jumlah} for s in payload.sparepart_items] if payload.sparepart_items else [],
             "created_at":       now,
