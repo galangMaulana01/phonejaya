@@ -103,26 +103,47 @@ class InstagramDirectScraper:
 
     BASE_URL = "https://www.instagram.com"
 
-    def __init__(self, session_id: Optional[str] = None):
-        self.session_id = session_id or os.getenv("INSTAGRAM_SESSIONID")
+    def __init__(self, session_id: Optional[str] = None, csrf_token: Optional[str] = None):
+        self.session_id = (session_id or os.getenv("INSTAGRAM_SESSIONID") or "").strip()
+        self.csrf_token = (csrf_token or os.getenv("INSTAGRAM_CSRFTOKEN") or "").strip()
 
-        cookies = {"csrftoken": "missing", "ig_did": "missing"}
+        for name, value in (("INSTAGRAM_SESSIONID", self.session_id), ("INSTAGRAM_CSRFTOKEN", self.csrf_token)):
+            if value:
+                try:
+                    value.encode("ascii")
+                except UnicodeEncodeError as e:
+                    raise InstagramScraperError(
+                        f"{name} contains a non-ASCII character ({e.reason} at position {e.start}) - "
+                        "this is almost always a copy-paste artifact. Re-copy the raw cookie "
+                        "value from DevTools > Cookies > instagram.com.",
+                        400,
+                    )
+
+        cookies = {"ig_did": "missing"}
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "x-ig-app-id": IG_APP_ID,
+            "x-requested-with": "XMLHttpRequest",
+            "Referer": self.BASE_URL + "/",
+        }
         if self.session_id:
             cookies["sessionid"] = self.session_id
+        if self.csrf_token:
+            # Instagram's 2026 endpoints reject requests that only carry
+            # csrftoken as a cookie - it must also be sent as this header,
+            # or several endpoints respond with 403/redirect loops even
+            # with an otherwise-valid sessionid.
+            cookies["csrftoken"] = self.csrf_token
+            headers["x-csrftoken"] = self.csrf_token
 
         self.client = httpx.AsyncClient(
             timeout=30.0,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-                ),
-                "Accept": "*/*",
-                "Accept-Language": "en-US,en;q=0.9",
-                "x-ig-app-id": IG_APP_ID,
-                "x-requested-with": "XMLHttpRequest",
-                "Referer": self.BASE_URL + "/",
-            },
+            headers=headers,
             cookies=cookies,
             follow_redirects=True,
         )
