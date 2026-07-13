@@ -163,7 +163,16 @@ class InstagramDirectScraper:
 
     async def _get_post_via_api(self, shortcode: str) -> InstagramPost:
         media_id = shortcode_to_media_id(shortcode)
-        resp = await self.client.get(f"{self.BASE_URL}/api/v1/media/{media_id}/info/")
+        try:
+            resp = await self.client.get(f"{self.BASE_URL}/api/v1/media/{media_id}/info/")
+        except httpx.TooManyRedirects:
+            raise InstagramScraperError(
+                "Instagram kept redirecting (likely bounced into a login/consent "
+                "loop) instead of returning the post - this means INSTAGRAM_SESSIONID "
+                "has expired or been invalidated. Log in again with the throwaway "
+                "account and refresh the cookie value.",
+                401,
+            )
 
         self._check_response_for_login_wall(resp)
         if resp.status_code != 200:
@@ -239,10 +248,19 @@ class InstagramDirectScraper:
             )
 
         username = username.lstrip("@").strip()
-        resp = await self.client.get(
-            f"{self.BASE_URL}/api/v1/users/web_profile_info/",
-            params={"username": username},
-        )
+        try:
+            resp = await self.client.get(
+                f"{self.BASE_URL}/api/v1/users/web_profile_info/",
+                params={"username": username},
+            )
+        except httpx.TooManyRedirects:
+            raise InstagramScraperError(
+                "Instagram kept redirecting (likely bounced into a login/consent "
+                "loop) instead of returning the profile - this means INSTAGRAM_SESSIONID "
+                "has expired or been invalidated. Log in again with the throwaway "
+                "account and refresh the cookie value.",
+                401,
+            )
 
         self._check_response_for_login_wall(resp)
         if resp.status_code == 404:
@@ -332,10 +350,6 @@ class InstagramDirectScraper:
         except Exception:
             return None
 
-
-# ════════════════════════════════════════════════════════════════
-# CONVENIENCE FUNCTIONS
-# ════════════════════════════════════════════════════════════════
 
 async def fetch_post_metrics(post_url: str) -> Dict[str, Any]:
     """Fetch metrics for a single Instagram post/reel by URL."""
