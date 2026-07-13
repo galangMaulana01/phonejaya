@@ -102,6 +102,12 @@ class InstagramDirectScraper:
     """
 
     BASE_URL = "https://www.instagram.com"
+    API_HOST = "https://i.instagram.com"  # private API host - required for
+                                          # /api/v1/media/{id}/info/ to return
+                                          # the full response (view counts,
+                                          # correct user object) - www.instagram.com
+                                          # serves an incomplete version of this
+                                          # same endpoint.
 
     def __init__(self, session_id: Optional[str] = None, csrf_token: Optional[str] = None):
         self.session_id = (session_id or os.getenv("INSTAGRAM_SESSIONID") or "").strip()
@@ -188,7 +194,7 @@ class InstagramDirectScraper:
     async def _get_post_via_api(self, shortcode: str) -> InstagramPost:
         media_id = shortcode_to_media_id(shortcode)
         try:
-            resp = await self.client.get(f"{self.BASE_URL}/api/v1/media/{media_id}/info/")
+            resp = await self.client.get(f"{self.API_HOST}/api/v1/media/{media_id}/info/")
         except httpx.TooManyRedirects:
             raise InstagramScraperError(
                 "Instagram kept redirecting (likely bounced into a login/consent "
@@ -225,7 +231,12 @@ class InstagramDirectScraper:
         # views is affected). The workaround: views are still present on
         # the author's feed *listing* endpoint, so look the post up there
         # as a supplementary call when views came back empty.
-        if post.views == 0 and post.author_username:
+        looks_like_real_username = (
+            post.author_username
+            and len(post.author_username) >= 2
+            and not post.author_username.isdigit()
+        )
+        if post.views == 0 and looks_like_real_username:
             try:
                 feed_posts = await self.get_user_feed(post.author_username, count=12)
                 match = next((p for p in feed_posts if p.shortcode == shortcode), None)
