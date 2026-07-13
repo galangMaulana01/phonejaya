@@ -64,6 +64,9 @@ class InstagramPost:
     is_video: bool
     author_username: str
     author_full_name: str
+    shares: int = 0  # Instagram does not expose share counts anywhere (official
+                     # API or otherwise) - always 0, this is a platform
+                     # limitation, not a scraping bug.
 
 
 def extract_shortcode(url: str) -> Optional[str]:
@@ -194,7 +197,23 @@ class InstagramDirectScraper:
                 404,
             )
 
-        return self._parse_item(items[0], shortcode)
+        post = self._parse_item(items[0], shortcode)
+
+        # As of 2026, Instagram removed view counts from this single-post
+        # endpoint entirely (likes/comments still work fine here - only
+        # views is affected). The workaround: views are still present on
+        # the author's feed *listing* endpoint, so look the post up there
+        # as a supplementary call when views came back empty.
+        if post.views == 0 and post.author_username:
+            try:
+                feed_posts = await self.get_user_feed(post.author_username, count=12)
+                match = next((p for p in feed_posts if p.shortcode == shortcode), None)
+                if match and match.views:
+                    post.views = match.views
+            except InstagramScraperError:
+                pass  # best-effort - keep views=0 rather than fail the whole request
+
+        return post
 
     async def _get_post_via_embed(self, shortcode: str) -> InstagramPost:
         """
@@ -351,6 +370,10 @@ class InstagramDirectScraper:
             return None
 
 
+# ════════════════════════════════════════════════════════════════
+# CONVENIENCE FUNCTIONS
+# ════════════════════════════════════════════════════════════════
+
 async def fetch_post_metrics(post_url: str) -> Dict[str, Any]:
     """Fetch metrics for a single Instagram post/reel by URL."""
     async with InstagramDirectScraper() as scraper:
@@ -360,6 +383,7 @@ async def fetch_post_metrics(post_url: str) -> Dict[str, Any]:
             "views": post.views,
             "likes": post.likes,
             "comments": post.comments,
+            "shares": post.shares,
             "is_video": post.is_video,
             "caption": post.caption,
             "taken_at": post.taken_at,
