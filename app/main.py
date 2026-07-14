@@ -8,7 +8,7 @@ from app.config.settings import settings
 from app.routes import (
     auth, units, transaksi, karyawan, log, dashboard,
     service, customer, sparepart, cabang, request_sparepart,
-    transfer_stok, influencer,                                          # ← NEW
+    transfer_stok, influencer, upload,                                        # ← NEW
 )
 
 logging.basicConfig(
@@ -60,6 +60,7 @@ def create_app() -> FastAPI:
     app.include_router(request_sparepart.router, prefix=PREFIX)
     app.include_router(transfer_stok.router,     prefix=PREFIX)
     app.include_router(influencer.router,        prefix=PREFIX)
+    app.include_router(upload.router,            prefix=PREFIX)
 
     @app.get("/health", tags=["Health"])
     async def health():

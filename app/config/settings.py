@@ -9,20 +9,21 @@ class Settings(BaseSettings):
 
     # MongoDB
     MONGO_URI: str = "mongodb://localhost:27017"
-    MONGO_DB: str = "jayapona"
+    MONGO_DB: str = "jayaphone"
 
     # JWT
-    JWT_SECRET: str = "dev-secret-change-in-production"
+    JWT_SECRET: str = "change-me-in-production"
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 480
+    JWT_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
     # CORS
     CORS_ORIGINS: str = "*"
 
-    # TikTok RapidAPI
-    TIKTOK_RAPIDAPI_KEY: str = ""
-    TIKTOK_RAPIDAPI_HOST: str = "free-tiktok-api-scraper-mobile-version.p.rapidapi.com"
-    TIKTOK_API_BASE_URL: str = "https://free-tiktok-api-scraper-mobile-version.p.rapidapi.com"
+    # Cloudinary
+    CLOUDINARY_CLOUD_NAME: str = "jayaphone"
+    CLOUDINARY_API_KEY: str = ""
+    CLOUDINARY_API_SECRET: str = ""
+    CLOUDINARY_UPLOAD_PRESET: str = "jayaphone_unsigned"
 
     @property
     def cors_origins_list(self) -> List[str]:
