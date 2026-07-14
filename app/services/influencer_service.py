@@ -48,7 +48,8 @@ async def get_dashboard_stats(
     db: AsyncIOMotorDatabase,
     influencer_id: str,
     cabang: str,
-    hari: int = 90
+    hari: int = 90,
+    platform: Optional[str] = None
 ) -> InfluencerDashboardStats:
     """Stats dashboard influencer: total video, views, likes, produk dipromosikan, trend, top 5."""
     now = datetime.now(timezone.utc)
@@ -56,6 +57,8 @@ async def get_dashboard_stats(
 
     # Base query
     base_query = {"influencer_id": influencer_id, "cabang": cabang}
+    if platform:
+        base_query["platform"] = platform
 
     # Total video
     total_video = await db.influencer_videos.count_documents(base_query)
@@ -300,26 +303,26 @@ async def update_influencer_social(db: AsyncIOMotorDatabase, influencer_id: str,
         oid = ObjectId(influencer_id)
     except Exception:
         raise HTTPException(status_code=400, detail="ID influencer tidak valid")
-    
+
     update_data = {}
     if payload.tiktok_username is not None:
         update_data["tiktok_username"] = payload.tiktok_username
     if payload.instagram_username is not None:
         update_data["instagram_username"] = payload.instagram_username
     # Facebook support REMOVED - facebook_page field kept for backward compatibility but not updated
-    
+
     if not update_data:
         raise HTTPException(status_code=422, detail="Tidak ada data yang diupdate")
-    
+
     update_data["updated_at"] = datetime.now(timezone.utc)
-    
+
     await db.users.update_one({"_id": oid}, {"$set": update_data})
     await write_log(
         db, actor, "Update Influencer Social",
         f"{influencer_id} → tiktok:{payload.tiktok_username} ig:{payload.instagram_username}",
         ""
     )
-    
+
     updated_user = await db.users.find_one({"_id": oid})
     return InfluencerProfileResponse(
         id=str(updated_user["_id"]),
@@ -396,7 +399,7 @@ async def get_owner_dashboard(db: AsyncIOMotorDatabase) -> OwnerInfluencerDashbo
             "total_views": 1,
             "total_likes": 1,
             "produk_dipromosikan": {"$size": "$unit_ids"},
-            "last_upload": 1,
+            "last_upload": {"$dateToString": {"date": "$last_upload", "format": "%Y-%m-%d %H:%M"}},
         }},
         {"$sort": {"total_views": -1}},
         {"$limit": 10}

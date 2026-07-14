@@ -26,6 +26,7 @@ router = APIRouter(prefix="/influencer", tags=["Influencer"])
 @router.get("/dashboard/stats", response_model=dict)
 async def dashboard_stats(
     hari: int = Query(90, ge=7, le=365),
+    platform: Optional[str] = Query(None),
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_influencer),
 ):
@@ -35,7 +36,7 @@ async def dashboard_stats(
     if not influencer_id or not cabang:
         raise HTTPException(status_code=400, detail="Data influencer tidak lengkap")
 
-    stats = await influencer_service.get_dashboard_stats(db, influencer_id, cabang, hari)
+    stats = await influencer_service.get_dashboard_stats(db, influencer_id, cabang, hari, platform)
     return ok(stats.model_dump())
 
 
@@ -102,6 +103,7 @@ async def list_videos(
 async def list_log(
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    platform: Optional[str] = Query(None),
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_influencer),
 ):
@@ -120,6 +122,10 @@ async def list_log(
             query["waktu"] = {"$gte": df, "$lte": dt}
         except ValueError:
             pass
+    
+    # Platform filter (regex match on aksi field since log doesn't have platform field yet)
+    if platform:
+        query["aksi"] = {"$regex": platform, "$options": "i"}
     
     # Get logs, limit 100
     logs = await db.log.find(query).sort("waktu", -1).limit(100).to_list(None)

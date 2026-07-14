@@ -165,19 +165,3 @@ async def update_service(
         doc.get("cabang", "")
     )
     return _fmt(updated)
-
-async def add_foto_url(db, service_id: str, url: str, actor: str) -> ServiceResponse:
-    doc = await db.service.find_one({"service_id": service_id})
-    if not doc:
-        raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
-
-    await db.service.update_one(
-        {"service_id": service_id},
-        {
-            "$push": {"foto_urls": url},
-            "$set":  {"updated_at": datetime.now(timezone.utc)},
-        },
-    )
-    updated = await db.service.find_one({"service_id": service_id})
-    await write_log(db, actor, "Upload Foto Service", service_id, doc.get("cabang", ""))
-    return _fmt(updated)

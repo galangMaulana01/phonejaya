@@ -35,5 +35,6 @@ async def login(db: AsyncIOMotorDatabase, username: str, password: str) -> Token
             name=user.get("name", user.get("username", "")),
             role=user.get("role", ""),
             cabang=user.get("cabang", ""),
+            foto_profil_url=user.get("foto_profil_url"),
         ),
     )

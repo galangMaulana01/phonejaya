@@ -12,10 +12,6 @@ from app.middlewares.auth import require_teknisi_or_owner, require_any, require_
 router = APIRouter(prefix="/service", tags=["Service"])
 
 
-class FotoUrlRequest(BaseModel):
-    url: str
-
-
 def _cabang_filter(user: dict, cabang_param: Optional[str]) -> Optional[str]:
     if user.get("role") == "owner":
         return cabang_param
@@ -94,14 +90,3 @@ async def service_detail(
     if doc.get("updated_at"):
         data["timeline"].append({"event": f"Status → {doc.get('status', '')}", "waktu": str(doc["updated_at"])})
     return ok(data)
-
-
-@router.post("/{service_id}/foto")
-async def add_foto_url(
-    service_id: str,
-    body:  FotoUrlRequest,
-    db:    AsyncIOMotorDatabase = Depends(get_db),
-    user:  dict = Depends(require_teknisi_or_owner),
-):
-    item = await service_service.add_foto_url(db, service_id, body.url, actor=user.get("name", user.get("username", "")))
-    return ok(item.model_dump(), message="Foto berhasil ditambahkan")

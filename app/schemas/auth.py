@@ -19,6 +19,7 @@ class UserPublic(BaseModel):
     name: str
     role: str
     cabang: str
+    foto_profil_url: Optional[str] = None
 
 
 class TokenResponse(BaseModel):
