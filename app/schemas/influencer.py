@@ -51,6 +51,8 @@ class VideoResponse(BaseModel):
     views: int
     likes: int
     comments: int
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
     uploaded_at: str
     updated_at: str
 

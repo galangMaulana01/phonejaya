@@ -64,6 +64,8 @@ class InstagramPost:
     is_video: bool
     author_username: str
     author_full_name: str
+    description: str = ""
+    thumbnail_url: str = ""
 
 
 def extract_shortcode(url: str) -> Optional[str]:
@@ -356,6 +358,16 @@ class InstagramDirectScraper:
     def _parse_item(self, item: dict, shortcode: str) -> InstagramPost:
         """Parse the mobile-style API item format (api/v1/media/{id}/info/)."""
         user = item.get("user", {}) or {}
+        # Get thumbnail from image_versions2
+        thumbnail_url = ""
+        image_versions = item.get("image_versions2", {}) or {}
+        candidates = image_versions.get("candidates", [])
+        if candidates:
+            thumbnail_url = candidates[0].get("url", "")
+        # Fallback to cover_photo_url or media_url
+        if not thumbnail_url:
+            thumbnail_url = item.get("cover_photo_url", "") or item.get("media_url", "")
+
         return InstagramPost(
             shortcode=shortcode,
             url=f"{self.BASE_URL}/p/{shortcode}/",
@@ -367,6 +379,8 @@ class InstagramDirectScraper:
             is_video=item.get("media_type") == 2,
             author_username=user.get("username", ""),
             author_full_name=user.get("full_name", ""),
+            description=(item.get("caption") or {}).get("text", "") if item.get("caption") else "",
+            thumbnail_url=thumbnail_url,
         )
 
     def _parse_graphql_item(
@@ -379,6 +393,15 @@ class InstagramDirectScraper:
             owner = node.get("owner", {}) or {}
             caption_edges = (node.get("edge_media_to_caption") or {}).get("edges", [])
             caption = caption_edges[0]["node"]["text"] if caption_edges else ""
+            
+            # Get thumbnail from display_resources
+            thumbnail_url = ""
+            display_resources = node.get("display_resources", [])
+            if display_resources:
+                thumbnail_url = display_resources[-1].get("src", "")
+            # Fallback to thumbnail_src
+            if not thumbnail_url:
+                thumbnail_url = node.get("thumbnail_src", "")
 
             return InstagramPost(
                 shortcode=shortcode,
@@ -394,6 +417,8 @@ class InstagramDirectScraper:
                 is_video=bool(node.get("is_video", False)),
                 author_username=owner.get("username", username_hint),
                 author_full_name=owner.get("full_name", ""),
+                description=caption,
+                thumbnail_url=thumbnail_url,
             )
         except Exception:
             return None
@@ -414,6 +439,8 @@ async def fetch_post_metrics(post_url: str) -> Dict[str, Any]:
             "comments": post.comments,
             "is_video": post.is_video,
             "caption": post.caption,
+            "description": post.description,
+            "thumbnail_url": post.thumbnail_url,
             "taken_at": post.taken_at,
             "owner": {
                 "username": post.author_username,

@@ -56,6 +56,8 @@ class TikTokVideo:
     author_username: str
     author_nickname: str
     is_video: bool = True
+    description: str = ""
+    thumbnail_url: str = ""
 
 
 # Markers that indicate TikTok served a bot-check / interstitial page instead
@@ -364,6 +366,8 @@ class TikTokDirectScraper:
                 author_username=author_username,
                 author_nickname=author.get("nickname") or author.get("nickName") or "",
                 is_video=item.get("isVideo", True),
+                description=item.get("desc", "") or item.get("description", ""),
+                thumbnail_url=item.get("video", {}).get("cover", "") or item.get("video", {}).get("dynamicCover", "") or item.get("cover", ""),
             )
         except Exception:
             return None
@@ -412,6 +416,8 @@ async def fetch_video_metrics(video_url: str) -> Dict[str, Any]:
             "author_username": video.author_username,
             "author_nickname": video.author_nickname,
             "url": video.url,
+            "description": video.description,
+            "thumbnail_url": video.thumbnail_url,
         }
 
 

@@ -35,6 +35,8 @@ def _fmt_video(doc: dict) -> VideoResponse:
         views=doc.get("views", 0),
         likes=doc.get("likes", 0),
         comments=doc.get("comments", 0),
+        description=doc.get("description", ""),
+        thumbnail_url=doc.get("thumbnail_url", ""),
         uploaded_at=fmt_waktu(doc.get("uploaded_at", datetime.now(timezone.utc))),
         updated_at=fmt_waktu(doc.get("updated_at", datetime.now(timezone.utc))),
     )
@@ -186,6 +188,8 @@ async def create_video(
     author_nickname = ""
 
     # Auto-fetch metrics berdasarkan platform
+    description = ""
+    thumbnail_url = ""
     if payload.platform.value == "tiktok":
         try:
             metrics = await fetch_tiktok_metrics(str(payload.url))
@@ -194,6 +198,8 @@ async def create_video(
             comments = metrics.get("comments", 0)
             author_username = metrics.get("author_username", "")
             author_nickname = metrics.get("author_nickname", "")
+            description = metrics.get("description", "")
+            thumbnail_url = metrics.get("thumbnail_url", "")
             await write_log(
                 db, actor, "TikTok Auto-Fetch Success",
                 f"{video_id} → {views} views, {likes} likes",
@@ -214,6 +220,8 @@ async def create_video(
             comments = metrics.get("comments", 0)
             author_username = metrics.get("owner", {}).get("username", "")
             author_nickname = metrics.get("owner", {}).get("full_name", "")
+            description = metrics.get("description", "")
+            thumbnail_url = metrics.get("thumbnail_url", "")
         except InstagramAPIError as e:
             await write_log(
                 db, actor, "Instagram Auto-Fetch Failed",
@@ -234,6 +242,8 @@ async def create_video(
         "views": int(views) if views else 0,
         "likes": int(likes) if likes else 0,
         "comments": int(comments) if comments else 0,
+        "description": description,
+        "thumbnail_url": thumbnail_url,
         "product_id": str(payload.product_id) if payload.product_id else None,  # NEW: Optional product linkage
         "uploaded_at": uploaded_at,
         "updated_at": now,
