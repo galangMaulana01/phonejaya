@@ -3,13 +3,17 @@ import logging.config
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app.config.settings import settings
 from app.routes import (
     auth, units, transaksi, karyawan, log, dashboard,
     service, customer, sparepart, cabang, request_sparepart,
-    transfer_stok, influencer, upload,                                        # ← NEW
+    transfer_stok, influencer, upload,
 )
+from app.config.database import init_db
 
 logging.basicConfig(
     level=logging.INFO if settings.is_production else logging.DEBUG,
@@ -21,16 +25,35 @@ logger = logging.getLogger(__name__)
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.APP_NAME,
-        description="JAYAPONA Backend API — Vercel Serverless",
+        description="JAYAPHONE Backend API — Vercel Serverless",
         version="2.0.0",
         docs_url=None if settings.is_production else "/docs",
         redoc_url=None if settings.is_production else "/redoc",
     )
 
-    # CORS — allow all untuk kompatibilitas Vercel
+    # Rate limiter
+    limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
+
+    # CORS — allow specific origins untuk keamanan
+    # Vercel frontend domains
+    allowed_origins = [
+        "https://jayaphone.vercel.app",
+        "https://phonejaya.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ]
+
+    # Allow additional origins from env (comma-separated)
+    if settings.CORS_ORIGINS and settings.CORS_ORIGINS != "*":
+        allowed_origins.extend([o.strip() for o in settings.CORS_ORIGINS.split(",")])
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -47,20 +70,24 @@ def create_app() -> FastAPI:
 
     # Routes
     PREFIX = "/api/v1"
-    app.include_router(auth.router,              prefix=PREFIX)
-    app.include_router(units.router,             prefix=PREFIX)
-    app.include_router(transaksi.router,         prefix=PREFIX)
-    app.include_router(karyawan.router,          prefix=PREFIX)
-    app.include_router(log.router,               prefix=PREFIX)
-    app.include_router(dashboard.router,         prefix=PREFIX)
-    app.include_router(service.router,           prefix=PREFIX)
-    app.include_router(customer.router,          prefix=PREFIX)
-    app.include_router(sparepart.router,         prefix=PREFIX)
-    app.include_router(cabang.router,            prefix=PREFIX)
+    app.include_router(auth.router, prefix=PREFIX)
+    app.include_router(units.router, prefix=PREFIX)
+    app.include_router(transaksi.router, prefix=PREFIX)
+    app.include_router(karyawan.router, prefix=PREFIX)
+    app.include_router(log.router, prefix=PREFIX)
+    app.include_router(dashboard.router, prefix=PREFIX)
+    app.include_router(service.router, prefix=PREFIX)
+    app.include_router(customer.router, prefix=PREFIX)
+    app.include_router(sparepart.router, prefix=PREFIX)
+    app.include_router(cabang.router, prefix=PREFIX)
     app.include_router(request_sparepart.router, prefix=PREFIX)
-    app.include_router(transfer_stok.router,     prefix=PREFIX)
-    app.include_router(influencer.router,        prefix=PREFIX)
-    app.include_router(upload.router,            prefix=PREFIX)
+    app.include_router(transfer_stok.router, prefix=PREFIX)
+    app.include_router(influencer.router, prefix=PREFIX)
+    app.include_router(upload.router, prefix=PREFIX)
+
+    @app.on_event("startup")
+    async def startup_event():
+        await init_db()
 
     @app.get("/health", tags=["Health"])
     async def health():
@@ -70,3 +97,6 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+# Export limiter for route usage
+limiter = app.state.limiter

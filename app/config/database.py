@@ -46,3 +46,35 @@ async def close_db() -> None:
         _client.close()
         _client = None
         logger.info("MongoDB connection closed")
+
+
+async def init_db() -> None:
+    """Create unique indexes for data integrity."""
+    client = get_client()
+    db = client[settings.MONGO_DB]
+    
+    # Users collection - unique username
+    await db.users.create_index("username", unique=True)
+    
+    # Karyawan collection - unique username per cabang (or global)
+    await db.karyawan.create_index("username", unique=True)
+    
+    # Cabang collection - unique kode
+    await db.cabang.create_index("kode", unique=True)
+    
+    # Units collection - unique unit_id per cabang
+    await db.units.create_index([("unit_id", 1), ("cabang", 1)], unique=True)
+    
+    # Service collection - unique service_id
+    await db.service.create_index("service_id", unique=True)
+    
+    # Transaksi collection - unique trx_id
+    await db.transaksi.create_index("trx_id", unique=True)
+    
+    # Sparepart collection - unique sp_id
+    await db.sparepart.create_index("sp_id", unique=True)
+    
+    # Influencer videos - unique video_id
+    await db.influencer_videos.create_index("video_id", unique=True)
+    
+    logger.info("Database indexes created/verified")

@@ -12,18 +12,20 @@ class Settings(BaseSettings):
     MONGO_DB: str = "jayaphone"
 
     # JWT
-    JWT_SECRET: str = "change-me-in-production"
+    JWT_SECRET: str = "dev-secret-change-in-production"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
-    # CORS
-    CORS_ORIGINS: str = "*"
-
     # Cloudinary
-    CLOUDINARY_CLOUD_NAME: str = "jayaphone"
+    CLOUDINARY_CLOUD_NAME: str = ""
     CLOUDINARY_API_KEY: str = ""
     CLOUDINARY_API_SECRET: str = ""
-    CLOUDINARY_UPLOAD_PRESET: str = "jayaphone_unsigned"
+
+    # Cron
+    CRON_SECRET: str = ""
+
+    # CORS
+    CORS_ORIGINS: str = "*"
 
     @property
     def cors_origins_list(self) -> List[str]:
@@ -43,8 +45,10 @@ class Settings(BaseSettings):
     )
 
 
+from functools import lru_cache
+
 @lru_cache
-def get_settings() -> Settings:
+def get_settings() -> "Settings":
     return Settings()
 
 

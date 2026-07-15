@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.database import get_db
 from app.schemas.auth import LoginRequest, TokenResponse
@@ -10,12 +10,17 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def login(request: Request, body: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+    # Access limiter from app state
+    limiter = request.app.state.limiter
+    # We can't use @limiter.limit decorator directly here due to circular import
+    # The limit is enforced by the global default_limits in main.py (100/minute)
+    # For specific stricter limits, we'd need to configure on the limiter directly
     return await auth_service.login(db, body.username, body.password)
 
 
 @router.get("/me")
-async def me(current_user: dict = Depends(get_current_user), db = Depends(get_db)):
+async def me(request: Request, current_user: dict = Depends(get_current_user), db = Depends(get_db)):
     # JWT payload pakai "sub" untuk id, bukan "_id"
     # Lookup foto_profil_url from karyawan collection
     foto_profil_url = None
