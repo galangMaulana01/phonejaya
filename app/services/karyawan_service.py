@@ -53,6 +53,7 @@ async def create_karyawan(db, payload: KaryawanCreateRequest, actor: str) -> Kar
     role_map = {
         "Kasir":   "kasir",
         "Teknisi": "teknisi",
+        "Kurir":   "kurir",
         "Owner":   "owner",
         "Admin":   "owner",
         "Influencer": "influencer",
