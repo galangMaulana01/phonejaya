@@ -12,7 +12,7 @@ from app.schemas.common import ok
 from app.services import cod_service
 from app.services.log_service import write_log
 from app.utils.id_generator import next_unit_id
-from app.middlewares.auth import get_current_user, require_kasir_teknisi_or_owner, require_kurir
+from app.middlewares.auth import get_current_user, require_kasir_teknisi_or_owner, require_kurir, require_kepala_or_owner
 
 router = APIRouter(prefix="/cod", tags=["COD"])
 
@@ -264,3 +264,26 @@ async def kurir_log(
         }
         for log in logs
     ])
+
+
+# ════════════════════════════════════════════════════════════════
+# KURIR MONITORING (Owner/Kepala Cabang)
+# ════════════════════════════════════════════════════════════════
+
+@router.get("/kurir/monitoring", response_model=dict)
+async def kurir_monitoring(
+    cabang: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kepala_or_owner),
+):
+    """Monitoring Kurir: statistik COD per kurir untuk Owner/Kepala Cabang."""
+    # Owner bisa filter cabang, KC hanya cabang sendiri
+    if user.get("role") == "kepala_cabang":
+        cabang = user.get("cabang")
+    elif not cabang and user.get("role") != "owner":
+        raise HTTPException(status_code=400, detail="Cabang tidak ditemukan")
+    
+    kurirs = await cod_service.get_kurir_monitoring(db, cabang, date_from, date_to)
+    return ok(kurirs)
