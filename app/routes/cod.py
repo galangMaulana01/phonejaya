@@ -10,6 +10,8 @@ from app.schemas.cod import (
 )
 from app.schemas.common import ok
 from app.services import cod_service
+from app.services.log_service import write_log
+from app.utils.id_generator import next_unit_id
 from app.middlewares.auth import get_current_user, require_kasir_teknisi_or_owner, require_kurir
 
 router = APIRouter(prefix="/cod", tags=["COD"])
@@ -178,7 +180,9 @@ async def kurir_input_stok(
             raise HTTPException(status_code=400, detail=f"Field {field} wajib diisi")
     
     # Generate unit_id
-    unit_id = await cod_service.next_unit_id(db, cabang)
+    merk = payload["merk"]
+    kondisi = payload["kondisi"]
+    unit_id = await next_unit_id(db, merk, kondisi, cabang)
     
     now = datetime.now(timezone.utc)
     doc = {
@@ -207,7 +211,7 @@ async def kurir_input_stok(
     
     await db.units.insert_one(doc)
     
-    await cod_service.write_log(
+    await write_log(
         db, kurir_id, "Input Stok (Kurir)",
         f"Unit {unit_id} → {payload['merk']} {payload['tipe']} (tanpa harga)",
         cabang
