@@ -11,7 +11,7 @@ from app.config.settings import settings
 from app.routes import (
     auth, units, transaksi, karyawan, log, dashboard,
     service, customer, sparepart, cabang, request_sparepart,
-    transfer_stok, influencer, upload,
+    transfer_stok, influencer, upload, cod,
 )
 from app.config.database import init_db
 
@@ -84,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(transfer_stok.router, prefix=PREFIX)
     app.include_router(influencer.router, prefix=PREFIX)
     app.include_router(upload.router, prefix=PREFIX)
+    app.include_router(cod.router, prefix=PREFIX)
 
     @app.on_event("startup")
     async def startup_event():

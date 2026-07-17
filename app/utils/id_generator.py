@@ -54,6 +54,15 @@ async def next_video_id(db: AsyncIOMotorDatabase, cabang: str) -> str:
     return f"{cabang}-VID-{str(seq).zfill(3)}"
 
 
+async def next_cod_id(db: AsyncIOMotorDatabase, cabang: str) -> str:
+    """
+    Generate COD ID: {CABANG}-COD-{SEQ}
+    Counter per cabang.
+    """
+    seq = await _next_seq(db, f"{cabang}-COD")
+    return f"{cabang}-COD-{str(seq).zfill(3)}"
+
+
 def _parse_kode(unit_id: str) -> tuple[str, str]:
     """
     Ekstrak kat_kode dan kondisi_kode dari unit_id.

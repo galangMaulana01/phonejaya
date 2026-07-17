@@ -63,3 +63,10 @@ def require_influencer_or_owner(current_user: dict = Depends(get_current_user)) 
     if current_user.get("role") not in ("owner", "influencer"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
     return current_user
+
+
+def require_kurir(current_user: dict = Depends(get_current_user)) -> dict:
+    """Hanya Kurir yang bisa akses."""
+    if current_user.get("role") != "kurir":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hanya Kurir yang diizinkan")
+    return current_user
