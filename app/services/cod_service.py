@@ -288,3 +288,94 @@ def _format_dashboard_item(doc: dict) -> CODRequestList:
         kurir_name=doc.get("kurir_name"),
         kurir_id=doc.get("kurir_id"),
     )
+
+
+async def get_kurir_monitoring(
+    db: AsyncIOMotorDatabase,
+    cabang: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None
+) -> List[dict]:
+    """
+    Get kurir monitoring stats per cabang for Owner/Kepala Cabang.
+    Returns list of kurir with their COD stats.
+    """
+    query = {}
+    if cabang:
+        query["cabang"] = cabang
+    
+    # Date filter
+    if date_from or date_to:
+        from datetime import datetime, timezone
+        wf = {}
+        if date_from:
+            wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
+        if date_to:
+            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
+        query["created_at"] = wf
+    
+    # Aggregate by kurir
+    pipeline = [
+        {"$match": query},
+        {"$group": {
+            "_id": "$kurir_id",
+            "kurir_name": {"$first": "$kurir_name"},
+            "cabang": {"$first": "$cabang"},
+            "total_cod": {"$sum": 1},
+            "cod_beli": {"$sum": {"$cond": [{"$eq": ["$type", "beli"]}, 1, 0]}},
+            "cod_jual": {"$sum": {"$cond": [{"$eq": ["$type", "jual"]}, 1, 0]}},
+            "status_menunggu": {"$sum": {"$cond": [{"$eq": ["$status", "menunggu_kurir"]}, 1, 0]}},
+            "status_diterima": {"$sum": {"$cond": [{"$eq": ["$status", "diterima"]}, 1, 0]}},
+            "status_proses": {
+                "$sum": {
+                    "$cond": [
+                        {"$in": ["$status", ["diterima", "kurir_menuju_lokasi", "sudah_bertemu_penjual", "barang_akan_dijemput", "barang_sudah_diambil", "kurir_sedang_transaksi"]]},
+                        1, 0
+                    ]
+                }
+            },
+            "status_selesai": {"$sum": {"$cond": [{"$eq": ["$status", "selesai"]}, 1, 0]}},
+            "status_transaksi_berhasil": {"$sum": {"$cond": [{"$eq": ["$status", "transaksi_berhasil"]}, 1, 0]}},
+            "status_gagal": {"$sum": {"$cond": [{"$eq": ["$status", "gagal"]}, 1, 0]}},
+            "status_ditolak": {"$sum": {"$cond": [{"$eq": ["$status", "ditolak"]}, 1, 0]}},
+            "total_offer_price": {"$sum": {"$cond": [{"$eq": ["$type", "beli"]}, "$offer_price", 0]}},
+            "total_transaksi_price": {"$sum": {"$cond": [{"$eq": ["$type", "jual"]}, "$offer_price", 0]}},
+            "last_activity": {"$max": "$updated_at"},
+            "first_activity": {"$min": "$created_at"},
+        }},
+        {"$sort": {"total_cod": -1}},
+    ]
+    
+    cursor = db.cod_requests.aggregate(pipeline)
+    results = await cursor.to_list(length=None)
+    
+    # Format response
+    formatted = []
+    for r in results:
+        # Calculate success rate
+        total_done = r.get("status_selesai", 0) + r.get("status_transaksi_berhasil", 0)
+        total_assigned = r.get("total_cod", 0) - r.get("status_menunggu", 0) - r.get("status_ditolak", 0)
+        success_rate = round((total_done / total_assigned * 100), 1) if total_assigned > 0 else 0
+        
+        formatted.append({
+            "kurir_id": r["_id"],
+            "kurir_name": r.get("kurir_name", r["_id"]),
+            "cabang": r.get("cabang"),
+            "total_cod": r.get("total_cod", 0),
+            "cod_beli": r.get("cod_beli", 0),
+            "cod_jual": r.get("cod_jual", 0),
+            "status_menunggu": r.get("status_menunggu", 0),
+            "status_diterima": r.get("status_diterima", 0),
+            "status_proses": r.get("status_proses", 0),
+            "status_selesai": r.get("status_selesai", 0),
+            "status_transaksi_berhasil": r.get("status_transaksi_berhasil", 0),
+            "status_gagal": r.get("status_gagal", 0),
+            "status_ditolak": r.get("status_ditolak", 0),
+            "success_rate": success_rate,
+            "total_offer_price": r.get("total_offer_price", 0),
+            "total_transaksi_price": r.get("total_transaksi_price", 0),
+            "last_activity": r.get("last_activity"),
+            "first_activity": r.get("first_activity"),
+        })
+    
+    return formatted
