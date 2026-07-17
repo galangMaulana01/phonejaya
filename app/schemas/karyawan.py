@@ -22,7 +22,7 @@ class KaryawanCreateRequest(BaseModel):
     @field_validator("jabatan")
     @classmethod
     def jabatan_valid(cls, v: str) -> str:
-        allowed = ["Kasir", "Teknisi", "Owner", "Admin", "Influencer"]
+        allowed = ["Kasir", "Teknisi", "Kurir", "Owner", "Admin", "Influencer"]
         if v not in allowed:
             raise ValueError(f"Jabatan harus salah satu: {', '.join(allowed)}")
         return v
