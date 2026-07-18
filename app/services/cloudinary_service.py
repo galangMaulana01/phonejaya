@@ -7,7 +7,7 @@ import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 
 from app.config.settings import settings
@@ -130,7 +130,7 @@ async def get_upload_signature(folder: str = "jayaphone", public_id: Optional[st
     Returns:
         Dict with signature, timestamp, and api_key
     """
-    timestamp = int(datetime.utcnow().timestamp())
+    timestamp = int(datetime.now(timezone.utc).timestamp())
     
     params = {
         "timestamp": timestamp,

@@ -25,7 +25,7 @@ async def list_units(
     q:      Optional[str] = Query(None),
     limit:  int = Query(200, ge=1, le=500),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    user:   dict = Depends(require_any),
+    user:   dict = Depends(require_kasir_teknisi_or_owner),
 ):
     cab = _cabang_filter(user, cabang)
     units = await unit_service.list_units(db, cabang=cab, status_filter=status, q=q, limit=limit)
@@ -58,6 +58,10 @@ async def approve_repair(
     db:      AsyncIOMotorDatabase = Depends(get_db),
     user:    dict = Depends(require_kasir_teknisi_or_owner),
 ):
+    # Only kasir, kepala_cabang, owner can approve — not teknisi
+    if user.get("role") == "teknisi":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Teknisi tidak bisa approve repair")
     unit = await unit_service.approve_repair(db, unit_id, body, actor=user.get("name", user.get("username", "")))
     return ok(unit.model_dump(), message=f"Unit {unit_id} disetujui → masuk stok Tersedia")
 
@@ -66,7 +70,7 @@ async def approve_repair(
 async def unit_detail(
     unit_id: str,
     db:   AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_any),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     """Return full unit info including photo URL."""
     from fastapi import HTTPException

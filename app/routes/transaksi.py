@@ -43,7 +43,7 @@ async def create_transaksi(
 async def transaksi_detail(
     trx_id: str,
     db:   AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_any),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     """Return transaction with financial breakdown (harga_modal, harga_jual, profit, margin)."""
     from fastapi import HTTPException

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional, List
+import logging
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 
@@ -11,6 +12,8 @@ from app.schemas.transfer_stok import (
     StatusTransferEnum,
 )
 from app.services.log_service import write_log
+
+logger = logging.getLogger(__name__)
 from app.utils.formatters import fmt_waktu
 from app.utils.id_generator import next_unit_id, _parse_kode
 
@@ -279,10 +282,10 @@ async def _proses_terima(
                 status_code=404,
                 detail=f"Unit {unit_id_asal} tidak ditemukan saat proses terima"
             )
-        if unit.get("status") != "Tersedia":
+        if unit.get("status") != "Dalam Transfer":
             raise HTTPException(
                 status_code=409,
-                detail=f"Unit {unit_id_asal} tidak lagi berstatus 'Tersedia' (sudah {unit.get('status')}). Transfer dibatalkan."
+                detail=f"Unit {unit_id_asal} tidak berstatus 'Dalam Transfer' (saat ini: {unit.get('status')}). Transfer dibatalkan."
             )
         if unit.get("cabang") != cabang_asal:
             raise HTTPException(
@@ -322,9 +325,9 @@ async def _proses_terima(
                 f"{transfer_id} • {unit_id_asal} → {unit_id_baru} | {cabang_asal} → {cabang_tujuan}",
                 cabang_tujuan,  # log di cabang tujuan (penerima)
             )
-        except Exception:
+        except Exception as e:
             # Log gagal tidak boleh menghentikan proses terima
-            pass
+            logger.warning(f"Failed to write transfer log: {e}")
 
     # Update embedded unit_id_baru di dokumen transfer
     updated_units = list(doc.get("units", []))

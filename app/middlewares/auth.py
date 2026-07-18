@@ -9,6 +9,8 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tidak valid")
+    if payload.get("_expired"):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
     if not payload.get("aktif", True):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun nonaktif")
     return payload

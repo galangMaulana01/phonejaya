@@ -77,4 +77,13 @@ async def init_db() -> None:
     # Influencer videos - unique video_id
     await db.influencer_videos.create_index("video_id", unique=True)
     
+    # COD requests - unique cod_id
+    await db.cod_requests.create_index("cod_id", unique=True)
+    
+    # Transfer stok - unique transfer_id
+    await db.transfer_stok.create_index("transfer_id", unique=True)
+    
+    # Request sparepart - unique req_id
+    await db.request_sparepart.create_index("req_id", unique=True)
+    
     logger.info("Database indexes created/verified")

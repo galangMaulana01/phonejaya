@@ -11,7 +11,7 @@ from app.schemas.cod import (
 from app.schemas.common import ok
 from app.services import cod_service
 from app.services.log_service import write_log
-from app.utils.id_generator import next_unit_id
+from app.utils.id_generator import next_unit_id, resolve_kategori
 from app.middlewares.auth import get_current_user, require_kasir_teknisi_or_owner, require_kurir, require_kepala_or_owner
 
 router = APIRouter(prefix="/cod", tags=["COD"])
@@ -174,39 +174,51 @@ async def kurir_input_stok(
     cabang = user.get("cabang")
     
     # Validasi required fields
-    required = ["imei", "merk", "tipe", "ram", "storage", "warna", "kondisi"]
+    required = ["imei", "merk", "tipe", "storage", "warna"]
     for field in required:
         if not payload.get(field):
             raise HTTPException(status_code=400, detail=f"Field {field} wajib diisi")
     
-    # Generate unit_id
-    merk = payload["merk"]
-    kondisi = payload["kondisi"]
-    unit_id = await next_unit_id(db, merk, kondisi, cabang)
+    # Derive kat_kode and kondisi_kode from payload (with safe defaults)
+    kat_kode = payload.get("kat_kode", "AI")  # Default: Android
+    kondisi_kode = payload.get("kondisi_kode", "BN")  # Default: Normal
+    kondisi_hp = payload.get("kondisi_hp", "Mulus")
+    
+    # Generate unit_id with proper kat_kode
+    unit_id = await next_unit_id(db, kat_kode, kondisi_kode, cabang)
     
     now = datetime.now(timezone.utc)
     doc = {
         "unit_id": unit_id,
-        "imei": payload["imei"],
         "merk": payload["merk"],
         "tipe": payload["tipe"],
-        "ram": payload["ram"],
-        "storage": payload["storage"],
+        "storage": payload.get("storage", "-"),
+        "ram": payload.get("ram", "-"),
         "warna": payload["warna"],
-        "kondisi": payload["kondisi"],
-        "grade": payload.get("grade", "B"),
-        "baterai": payload.get("baterai"),
-        "kelengkapan": payload.get("kelengkapan", []),
-        "catatan": payload.get("catatan"),
+        "imei": payload["imei"],
+        "imei2": "-",
+        "tipe_sim": "Single SIM",
+        "keamanan": "Tidak Ada",
+        "speaker": "Normal",
+        "lcd": "Original",
+        "harga_modal": 0,
+        "harga_jual": 0,
+        "kondisi": kondisi_kode,
+        "kondisi_hp": kondisi_hp,
+        "battery": payload.get("battery", 100),
+        "battery_health": 0,
         "status": "Tersedia",
+        "kategori": resolve_kategori(kat_kode),
+        "catatan": payload.get("catatan", ""),
         "cabang": cabang,
-        "created_by": kurir_id,
-        "created_by_name": kurir_name,
-        "created_by_role": "Kurir",
-        "harga_beli": None,  # Kurir TIDAK input harga
-        "harga_jual": None,
+        "locked": False,
+        "garansi_toko": 7,
         "created_at": now,
-        "updated_at": now,
+        "created_by": kurir_name,
+        "tgl_terjual": None,
+        "service_id": None,
+        "foto_url": payload.get("foto_url"),
+        "input_by_role": "Kurir",
     }
     
     await db.units.insert_one(doc)

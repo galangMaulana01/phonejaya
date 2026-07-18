@@ -98,13 +98,20 @@ async def create_transaksi(
             sp = await db.sparepart.find_one({"sp_id": item.sp_id})
             if not sp:
                 raise HTTPException(status_code=404, detail=f"Sparepart {item.sp_id} tidak ditemukan")
-            if sp["stok"] < item.jumlah:
+            if sp.get("cabang") != cabang:
+                raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
+
+            # Atomic check-and-decrement to prevent race condition
+            result = await db.sparepart.find_one_and_update(
+                {"sp_id": item.sp_id, "stok": {"$gte": item.jumlah}},
+                {"$inc": {"stok": -item.jumlah}, "$set": {"updated_at": datetime.now(timezone.utc)}},
+                return_document=False,
+            )
+            if not result:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Stok {sp['nama']} tidak cukup. Tersedia: {sp['stok']}, diminta: {item.jumlah}"
                 )
-            if sp.get("cabang") != cabang:
-                raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
 
             sp_jual = sp["harga_jual"] * item.jumlah
             sp_modal = sp["harga_beli"] * item.jumlah
@@ -112,11 +119,6 @@ async def create_transaksi(
             sp_total_modal += sp_modal
             sp_labels.append(f"{sp['nama']} x{item.jumlah}")
             sp_items_doc.append({"sp_id": item.sp_id, "jumlah": item.jumlah, "nama": sp["nama"], "harga": sp["harga_jual"]})
-
-            await db.sparepart.update_one(
-                {"sp_id": item.sp_id},
-                {"$set": {"stok": sp["stok"] - item.jumlah, "updated_at": datetime.now(timezone.utc)}}
-            )
 
     # ── Calculate totals ──
     harga_jual_base = total_jual_unit + sp_total_jual

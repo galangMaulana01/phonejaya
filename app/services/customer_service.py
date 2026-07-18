@@ -25,6 +25,7 @@ async def list_customer(db, q: Optional[str]=None) -> List[CustomerResponse]:
 async def create_customer(db, payload: CustomerCreateRequest, actor: str) -> CustomerResponse:
     doc = {
         "nama": payload.nama, "kontak": payload.kontak,
+        "cabang": payload.cabang,
         "created_at": datetime.now(timezone.utc),
         "points": 0,
     }

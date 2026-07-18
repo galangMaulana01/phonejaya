@@ -67,7 +67,7 @@ async def respond_request(db, req_id: str, payload: RequestSparepartResponseRequ
     if payload.estimasi_tiba: update["estimasi_tiba"] = payload.estimasi_tiba
 
     if payload.status.value == "Diterima" and doc["tipe"] == "item_baru":
-        from app.services.sparepart_service import create_sparepart
+        from app.services.sparepart import create_sparepart
         from app.schemas.sparepart import SparepartCreateRequest
         await create_sparepart(db, SparepartCreateRequest(nama=doc["nama_sp"], stok=0, cabang=doc["cabang"]), actor=actor)
 

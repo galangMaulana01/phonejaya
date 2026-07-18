@@ -160,7 +160,12 @@ async def pecat_karyawan(
     actor: str,
 ) -> dict:
     from bson import ObjectId
-    kar = await db.karyawan.find_one({"_id": ObjectId(karyawan_id)})
+    from bson.errors import InvalidId
+    try:
+        oid = ObjectId(karyawan_id)
+    except (InvalidId, Exception):
+        raise HTTPException(status_code=400, detail="ID karyawan tidak valid")
+    kar = await db.karyawan.find_one({"_id": oid})
     if not kar:
         raise HTTPException(status_code=404, detail="Karyawan tidak ditemukan")
 

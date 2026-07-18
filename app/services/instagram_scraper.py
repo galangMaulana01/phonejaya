@@ -38,6 +38,9 @@ iterate on - not a silent "0 views" that looks like success.
 import os
 import re
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 import httpx
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
@@ -420,7 +423,8 @@ class InstagramDirectScraper:
                 description=caption,
                 thumbnail_url=thumbnail_url,
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to parse Instagram post item: {e}")
             return None
 
 

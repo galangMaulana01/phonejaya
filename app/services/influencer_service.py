@@ -3,6 +3,7 @@ from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 from bson import ObjectId
+from bson.errors import InvalidId
 
 from app.schemas.influencer import (
     VideoCreateRequest,
@@ -292,7 +293,7 @@ async def get_profile(db: AsyncIOMotorDatabase, influencer_id: str) -> Influence
     """Ambil profil influencer dari users collection (basic info + social media)."""
     try:
         user = await db.users.find_one({"_id": ObjectId(influencer_id)})
-    except Exception:
+    except InvalidId:
         user = None
     if not user:
         raise HTTPException(status_code=404, detail="Influencer tidak ditemukan")
@@ -311,7 +312,7 @@ async def update_influencer_social(db: AsyncIOMotorDatabase, influencer_id: str,
     """Update social media usernames for influencer (TikTok and Instagram only)."""
     try:
         oid = ObjectId(influencer_id)
-    except Exception:
+    except InvalidId:
         raise HTTPException(status_code=400, detail="ID influencer tidak valid")
 
     update_data = {}

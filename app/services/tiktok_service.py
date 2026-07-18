@@ -4,6 +4,9 @@ Uses: https://rapidapi.com/tokinsight/api/free-tiktok-api-scraper-mobile-version
 """
 import re
 import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 from typing import Optional, Dict, Any
 from app.config.settings import settings
 
@@ -78,7 +81,8 @@ async def fetch_video_metrics(video_url: str) -> Dict[str, Any]:
                     )
             except httpx.TimeoutException:
                 continue
-            except Exception:
+            except Exception as e:
+                logger.debug(f"TikTok API endpoint failed: {e}")
                 continue
 
     raise TikTokAPIError("Failed to fetch video metrics from all endpoints", 502)

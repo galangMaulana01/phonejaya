@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
+from bson.errors import InvalidId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.config.database import get_db
@@ -77,7 +78,7 @@ async def get_karyawan_stats(
     # Validate ObjectId
     try:
         oid = ObjectId(karyawan_id)
-    except Exception:
+    except InvalidId:
         raise HTTPException(status_code=400, detail="ID karyawan tidak valid")
     kar = await db.karyawan.find_one({"_id": oid})
     if not kar:

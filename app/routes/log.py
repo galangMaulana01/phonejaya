@@ -28,6 +28,9 @@ async def list_log(
     elif user.get("role") == "teknisi":
         # Teknisi hanya bisa lihat log dengan user = nama mereka
         query["user"] = user.get("name", user.get("username", ""))
+    elif user.get("role") == "kurir":
+        # Kurir hanya bisa lihat log sendiri
+        query["user"] = user.get("name", user.get("username", ""))
     
     # Role filter untuk spesifik aksi (teknisi, service, dll)
     if role_filter and user.get("role") in ("owner", "kepala_cabang"):

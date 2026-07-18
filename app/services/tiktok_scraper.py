@@ -32,8 +32,12 @@ import os
 import re
 import httpx
 import json
+import logging
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
+
+
+logger = logging.getLogger(__name__)
 
 
 class TikTokScraperError(Exception):
@@ -43,7 +47,6 @@ class TikTokScraperError(Exception):
         self.status_code = status_code
 
 
-@dataclass
 @dataclass
 class TikTokVideo:
     video_id: str
@@ -128,9 +131,9 @@ class TikTokDirectScraper:
             return
         try:
             await self.client.get(self.BASE_URL)
-        except Exception:
+        except Exception as e:
             # Non-fatal - we still try the real request below
-            pass
+            logger.debug(f"Bootstrap request failed (non-fatal): {e}")
         self._bootstrapped = True
 
     def _extract_rehydration_json(self, html: str) -> Optional[dict]:
@@ -369,7 +372,8 @@ class TikTokDirectScraper:
                 description=item.get("desc", "") or item.get("description", ""),
                 thumbnail_url=item.get("video", {}).get("cover", "") or item.get("video", {}).get("dynamicCover", "") or item.get("cover", ""),
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to parse TikTok video item: {e}")
             return None
 
     def _extract_video_id(self, url: str) -> Optional[str]:

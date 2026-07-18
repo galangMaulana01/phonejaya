@@ -36,8 +36,8 @@ async def sync_all_influencers(db: AsyncIOMotorDatabase) -> Dict[str, Any]:
         "role": "influencer",
         "aktif": True,
         "$or": [
-            {"tiktok_username": {"$ne": None, "$ne": ""}},
-            {"instagram_username": {"$ne": None, "$ne": ""}},
+            {"tiktok_username": {"$nin": [None, ""]}},
+            {"instagram_username": {"$nin": [None, ""]}},
             # Facebook support REMOVED - facebook_page field kept for backward compatibility
         ]
     }).to_list(length=None)
