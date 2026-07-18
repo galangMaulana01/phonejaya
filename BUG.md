@@ -40,8 +40,8 @@ $ grep -n "Dalam Transfer" app/services/transfer_stok_service.py
 - **Impact:** No transfer between branches could ever complete.
 - **Fix Plan:** Change check to `status != "Dalam Transfer"`.
 - **Regression Risk:** Low
-- **Status:** FIXED
-- **Verified By:** Code check: grep confirms line 285 checks "Dalam Transfer". Requires manual test: create transfer via POST /transfer-stok, accept via PATCH /transfer-stok/{id}, verify unit moves to destination branch with new unit_id.
+- **Status:** VERIFIED
+- **Verified By:** LIVE TEST: KC created TRF-005 (BDG→JKT, unit BDG-IP-BN-026). Owner accepted. Response: unit_id_baru=JKT-IP-BN-002, status=Diterima. Transfer acceptance works correctly.
 
 ---
 
@@ -83,8 +83,8 @@ $ sed -n '185,190p' app/routes/cod.py
 - **Impact:** Broken unit ID format, counter fragmentation.
 - **Fix Plan:** Use proper kat_kode/kondisi_kode with defaults.
 - **Regression Risk:** Medium
-- **Status:** FIXED
-- **Verified By:** Code check: kurir_input_stok now uses kat_kode/kondisi_kode with defaults. Requires manual test: POST /cod/kurir/input-stok with kat_kode="AI", verify unit_id format is "JYP-AI-BN-001".
+- **Status:** VERIFIED
+- **Verified By:** LIVE TEST: Kurir POST /cod/kurir/input-stok with kat_kode="AI" returned 201. Unit ID: BDG-AI-BN-009 (correct CABANG-KAT-KONDISI-SEQ format).
 
 ---
 
@@ -111,8 +111,8 @@ $ grep "imei2\|tipe_sim\|keamanan\|speaker\|lcd\|battery_health\|locked\|garansi
 - **Impact:** KeyError when formatting kurir-created units.
 - **Fix Plan:** Align field names with standard unit schema.
 - **Regression Risk:** Medium
-- **Status:** FIXED
-- **Verified By:** Code check: all standard fields present. Requires manual test: create kurir unit, list via GET /units, verify no KeyError in response.
+- **Status:** VERIFIED
+- **Verified By:** LIVE TEST: GET /units/BDG-AI-BN-009/detail returned 200. All 13 standard fields present (imei2, tipe_sim, keamanan, speaker, lcd, battery_health, locked, garansi_toko, kategori, harga_modal=0, harga_jual=0, battery, kondisi_hp=Mulus).
 
 ---
 
@@ -442,17 +442,14 @@ $ grep -c "console.log" index.html
 
 | Status | Count |
 |--------|-------|
-| VERIFIED | 14 |
-| FIXED (needs manual test) | 5 |
+| VERIFIED | 17 |
+| FIXED (needs manual test) | 2 |
 | OPEN | 1 |
 | **Total** | **20** |
 
-### VERIFIED (14): BUG-001, 003, 006, 007, 008, 010, 013, 014, 015, 016, 017, 018, 019, 020
+### VERIFIED (17): BUG-001, 002, 003, 004, 005, 006, 007, 008, 010, 013, 014, 015, 016, 017, 018, 019, 020
 
-### FIXED — Requires Manual Test (5):
-- **BUG-002**: Transfer accept — create transfer, accept it, verify unit moves to new branch
-- **BUG-004**: Kurir unit ID — POST /cod/kurir/input-stok, verify unit_id format
-- **BUG-005**: Kurir unit schema — create kurir unit, list via GET /units, verify no KeyError
+### FIXED — Requires Manual Test (2):
 - **BUG-009**: Atomic stok — concurrent transactions on same sparepart, verify stok >= 0
 - **BUG-012**: Indexes — verify indexes exist after MongoDB startup
 
