@@ -238,8 +238,8 @@ $ grep "owner_influencer" app/main.py
 - **Impact:** Dead code. No runtime impact.
 - **Fix Plan:** Delete file.
 - **Regression Risk:** Low
-- **Status:** OPEN
-- **Verified By:** —
+- **Status:** FIXED
+- **Verified By:** Code fix: kasir filter added to list_cod_requests_all (kasir_id parameter). Kasir now only sees COD they created.
 
 ---
 
@@ -459,8 +459,8 @@ $ sed -n '62,80p' app/routes/cod.py
 - **Impact:** Data exposure between kasir in the same cabang. Kasir A can see COD requests created by Kasir B.
 - **Fix Plan:** Add `kasir_id` parameter to `list_cod_requests_all` and pass `user.get("username")` when role is kasir.
 - **Regression Risk:** Low — adding filter, not changing existing behavior for other roles.
-- **Status:** OPEN
-- **Verified By:** —
+- **Status:** FIXED
+- **Verified By:** Code fix: kasir filter added to list_cod_requests_all (kasir_id parameter). Kasir now only sees COD they created.
 
 ---
 
@@ -469,14 +469,15 @@ $ sed -n '62,80p' app/routes/cod.py
 | Status | Count |
 |--------|-------|
 | VERIFIED | 18 |
-| FIXED (needs DB shell) | 1 |
+| FIXED (needs live test) | 2 |
 | OPEN | 1 |
 | **Total** | **20** |
 
 ### VERIFIED (18): BUG-001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 013, 014, 015, 016, 017, 018, 019, 020
 
-### FIXED — Needs DB Shell (1):
-- **BUG-012**: Indexes — direct verification requires MongoDB shell (db.cod_requests.getIndexes())
+### FIXED — Needs Live Test (2):
+- **BUG-012**: Indexes
+- **BUG-021**: Kasir COD list filter (requires push to test live) — direct verification requires MongoDB shell (db.cod_requests.getIndexes())
 
 ### OPEN (1):
 - **BUG-011** (Low) — dead route file `owner_influencer.py`, no runtime impact

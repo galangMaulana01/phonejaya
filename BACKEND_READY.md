@@ -6,7 +6,7 @@ Generated: 2026-07-19 (Phase 5 — Backend Final Fix Loop)
 
 ## Summary
 
-21 files changed, 113 insertions, 53 deletions.
+25 files changed, 253 insertions, 88 deletions.
 All Critical and High backend bugs fixed and verified.
 
 ---
@@ -28,6 +28,8 @@ All Critical and High backend bugs fixed and verified.
 | BUG-012 | Medium | database.py | Added unique indexes on cod_requests, transfer_stok, request_sparepart |
 | BUG-013 | Medium | cloudinary_service.py | Replaced deprecated utcnow() with datetime.now(timezone.utc) |
 | BUG-014 | High | transaksi.py, units.py | Restricted financial data endpoints to kasir_teknisi_or_owner |
+| BUG-015 | High | auth_service.py | Fixed null check order in login |
+| BUG-021 | Medium | cod.py, cod_service.py | Added kasir filter to COD list (kasir only sees own COD) |
 | BUG-015 | High | auth_service.py | Fixed null check order (user.get() before user is None) |
 | BUG-019 | — | Various | ObjectId error handling, $ne→$nin fix, logging additions |
 
@@ -48,6 +50,29 @@ All files compile OK
 $ git diff --stat
 21 files changed, 113 insertions(+), 53 deletions(-)
 ```
+
+---
+
+## New Feature: COD Delivery
+
+Added COD type="delivery" for kasir to assign transaction delivery to kurir.
+
+### Changes:
+- **cod.py**: Route passes `role` to service, kasir filter in list endpoint
+- **cod_service.py**: COD_DELIVERY_FLOW state machine, delivery validation (ownership, items from transaksi), kasir_id filter
+- **cod.py schema**: Added type "delivery", fields trx_id, delivery_address, wa_customer, items
+
+### State Machine:
+```
+menunggu_kurir → diterima → kurir_menuju_toko → barang_sudah_diambil → sedang_diantar → terkirim
+                                                                                      → gagal
+                → ditolak
+```
+
+### Security:
+- Ownership: trx.cabang must match user.cabang
+- Ownership: kasir can only create COD for their own transactions
+- Duplicate prevention: only 1 active COD delivery per transaksi
 
 ---
 
