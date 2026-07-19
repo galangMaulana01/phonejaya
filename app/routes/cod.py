@@ -27,16 +27,17 @@ async def create_cod_request(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
-    """Kasir buat request COD (Beli/Jual)."""
+    """Kasir buat request COD (Beli/Jual/Delivery)."""
     kasir_id = user.get("sub") or user.get("username")
     kasir_name = user.get("name") or user.get("username")
     cabang = user.get("cabang")
     actor = kasir_name
+    role = user.get("role", "kasir")
     
     if not kasir_id or not cabang:
         raise HTTPException(status_code=400, detail="Data kasir tidak lengkap")
     
-    cod = await cod_service.create_cod_request(db, payload, kasir_id, kasir_name, cabang, actor)
+    cod = await cod_service.create_cod_request(db, payload, kasir_id, kasir_name, cabang, actor, role)
     return ok(cod.model_dump(), message=f"COD Request {cod.cod_id} berhasil dibuat")
 
 
@@ -68,14 +69,14 @@ async def list_cod_requests(
     cabang = user.get("cabang")
     role = user.get("role", "kasir")
     
-    # Kasir hanya lihat miliknya sendiri
+    # Kasir hanya lihat COD yang dia buat sendiri
+    kasir_filter = None
     if role == "kasir":
-        kurir_id = user.get("sub") or user.get("username")
-        # Kasir tidak punya kurir_id, filter by kasir_id di service
-        pass  # service handles this
+        kasir_filter = user.get("username")
     
     cods = await cod_service.list_cod_requests_all(
-        db, cabang, status, type, date_from, date_to, limit
+        db, cabang, status, type, date_from, date_to, limit,
+        kasir_id=kasir_filter
     )
     return ok([c.model_dump() for c in cods])
 

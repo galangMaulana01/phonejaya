@@ -4,29 +4,31 @@ from datetime import datetime
 
 
 class CODRequestCreate(BaseModel):
-    """Kasir buat COD request (Beli atau Jual)."""
-    type: Literal["beli", "jual"]  # beli = Kasir beli HP, jual = Kasir jual HP via COD
+    """Kasir buat COD request (Beli, Jual, atau Delivery)."""
+    type: Literal["beli", "jual", "delivery"]
     
     # Common fields
-    location: str
-    wa_number: str
-    screenshot_url: str  # Cloudinary URL dari upload Kasir
+    location: str = "Toko"
+    wa_number: str = ""
+    screenshot_url: str = ""
     note: Optional[str] = None
-    kurir_id: str  # Pilih kurir
+    kurir_id: str
     
     # Type = beli fields
     product_name: Optional[str] = None
     offer_price: Optional[int] = None
     product_link: Optional[str] = None
     
-    # Type = jual fields - akan diisi saat create transaksi COD
-    transaksi_id: Optional[str] = None
+    # Type = delivery fields
+    trx_id: Optional[str] = None
+    delivery_address: Optional[str] = None
+    wa_customer: Optional[str] = None
     
     @field_validator("type")
     @classmethod
     def validate_type(cls, v):
-        if v not in ("beli", "jual"):
-            raise ValueError("Type harus 'beli' atau 'jual'")
+        if v not in ("beli", "jual", "delivery"):
+            raise ValueError("Type harus 'beli', 'jual', atau 'delivery'")
         return v
 
 
@@ -72,7 +74,10 @@ class CODRequestDetail(BaseModel):
     product_name: Optional[str] = None
     offer_price: Optional[int] = None
     product_link: Optional[str] = None
-    transaksi_id: Optional[str] = None
+    trx_id: Optional[str] = None
+    delivery_address: Optional[str] = None
+    wa_customer: Optional[str] = None
+    items: Optional[List[dict]] = None
     kasir_id: str
     kasir_name: str
     kurir_id: Optional[str] = None

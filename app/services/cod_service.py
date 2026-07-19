@@ -33,14 +33,27 @@ COD_JUAL_FLOW = {
     "ditolak": [],
 }
 
+COD_DELIVERY_FLOW = {
+    "menunggu_kurir": ["diterima", "ditolak"],
+    "diterima": ["kurir_menuju_toko"],
+    "kurir_menuju_toko": ["barang_sudah_diambil"],
+    "barang_sudah_diambil": ["sedang_diantar"],
+    "sedang_diantar": ["terkirim", "gagal"],
+    "terkirim": [],
+    "gagal": [],
+    "ditolak": [],
+}
+
 ALL_FLOWS = {
     "beli": COD_BELI_FLOW,
     "jual": COD_JUAL_FLOW,
+    "delivery": COD_DELIVERY_FLOW,
 }
 
 INITIAL_STATUS = {
     "beli": "menunggu_kurir",
     "jual": "menunggu_kurir",
+    "delivery": "menunggu_kurir",
 }
 
 
@@ -50,9 +63,10 @@ async def create_cod_request(
     kasir_id: str,
     kasir_name: str,
     cabang: str,
-    actor: str
+    actor: str,
+    role: str = "kasir"
 ) -> CODRequestResponse:
-    """Kasir buat request COD (Beli atau Jual)."""
+    """Kasir buat request COD (Beli, Jual, atau Delivery)."""
     
     # Validasi kurir ada di cabang yang sama
     kurir = await db.users.find_one({
@@ -76,18 +90,72 @@ async def create_cod_request(
         "note": "Request dibuat"
     }]
     
+    # Delivery-specific fields
+    delivery_address = ""
+    wa_customer = ""
+    items = []
+    trx_id_val = None
+    
+    if payload.type == "delivery":
+        # Validasi trx_id wajib
+        if not payload.trx_id:
+            raise HTTPException(status_code=422, detail="trx_id wajib untuk type delivery")
+        
+        # Validasi transaksi exists
+        trx = await db.transaksi.find_one({"trx_id": payload.trx_id})
+        if not trx:
+            raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
+        
+        # Validasi ownership: cabang harus sama
+        if trx.get("cabang") != cabang:
+            raise HTTPException(status_code=403, detail="Transaksi bukan milik cabang Anda")
+        
+        # Validasi ownership: kasir harus pemilik transaksi (owner/KC bisa akses semua)
+        if role not in ("owner", "kepala_cabang"):
+            if trx.get("kasir") != kasir_name:
+                raise HTTPException(status_code=403, detail="Anda hanya bisa mengirim transaksi milik Anda sendiri")
+        
+        # Cek belum ada COD delivery aktif untuk transaksi ini
+        existing = await db.cod_requests.find_one({
+            "trx_id": payload.trx_id, "type": "delivery",
+            "status": {"$nin": ["ditolak", "gagal", "terkirim"]}
+        })
+        if existing:
+            raise HTTPException(status_code=409, detail=f"COD delivery sudah ada ({existing['cod_id']}) untuk transaksi ini")
+        
+        # Build items dari transaksi
+        if trx.get("unit_id"):
+            items.append({"type": "unit", "unit_id": trx["unit_id"], "label": trx.get("unit_label", "")})
+        for sp in trx.get("sp_items", []):
+            items.append({"type": "sparepart", "sp_id": sp.get("sp_id", ""), "nama": sp.get("nama", ""), "jumlah": sp.get("jumlah", 1)})
+        
+        delivery_address = payload.delivery_address or ""
+        wa_customer = payload.wa_customer or trx.get("customer_kontak", "")
+        trx_id_val = payload.trx_id
+        
+        # Auto-fill product_name dan offer_price dari transaksi
+        product_name = payload.product_name or trx.get("unit_label", "") or f"{len(items)} item"
+        offer_price = payload.offer_price or trx.get("harga_jual", 0)
+    else:
+        trx_id_val = payload.trx_id  # backward compat: bisa diisi untuk beli/jual juga
+        product_name = payload.product_name
+        offer_price = payload.offer_price
+    
     doc = {
         "cod_id": cod_id,
         "type": payload.type,
         "status": initial_status,
         "screenshot_url": payload.screenshot_url,
         "product_link": payload.product_link,
-        "product_name": payload.product_name,
-        "offer_price": payload.offer_price,
+        "product_name": product_name,
+        "offer_price": offer_price,
         "note": payload.note,
         "location": payload.location,
         "wa_number": payload.wa_number,
-        "transaksi_id": payload.transaksi_id,
+        "trx_id": trx_id_val,
+        "delivery_address": delivery_address,
+        "wa_customer": wa_customer,
+        "items": items,
         "kasir_id": kasir_id,
         "kasir_name": kasir_name,
         "kurir_id": payload.kurir_id,
@@ -103,7 +171,7 @@ async def create_cod_request(
     
     await write_log(
         db, actor, "Buat COD Request",
-        f"{cod_id} → {payload.type.upper()} {payload.product_name or ''} ({payload.offer_price or 0})",
+        f"{cod_id} → {payload.type.upper()} {product_name or ''} ({offer_price or 0})",
         cabang
     )
     
@@ -197,13 +265,16 @@ async def list_cod_requests_all(
     type_filter: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    limit: int = 100
+    limit: int = 100,
+    kasir_id: Optional[str] = None
 ) -> List[CODRequestList]:
     """List COD untuk Kasir/KC/Owner."""
     
     query = {}
     if cabang:
         query["cabang"] = cabang
+    if kasir_id:
+        query["kasir_id"] = kasir_id
     if status:
         query["status"] = status
     if type_filter:
@@ -246,7 +317,10 @@ async def get_cod_detail(
         product_name=doc.get("product_name"),
         offer_price=doc.get("offer_price"),
         product_link=doc.get("product_link"),
-        transaksi_id=doc.get("transaksi_id"),
+        trx_id=doc.get("trx_id") or doc.get("transaksi_id"),  # backward compat
+        delivery_address=doc.get("delivery_address"),
+        wa_customer=doc.get("wa_customer"),
+        items=doc.get("items"),
         kasir_id=doc["kasir_id"],
         kasir_name=doc["kasir_name"],
         kurir_id=doc.get("kurir_id"),

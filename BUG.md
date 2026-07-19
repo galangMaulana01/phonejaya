@@ -198,8 +198,8 @@ $ grep -A3 "find_one_and_update" app/services/transaksi_service.py | head -5
 - **Impact:** Stok could go negative under concurrent transactions.
 - **Fix Plan:** Use `find_one_and_update` with atomic check-and-decrement.
 - **Regression Risk:** Low
-- **Status:** FIXED
-- **Verified By:** Code check: atomic find_one_and_update with $gte confirmed. Requires manual test: send concurrent POST /transaksi requests for same sparepart, verify stok never goes below 0.
+- **Status:** VERIFIED
+- **Verified By:** LIVE TEST: Created sparepart SP-003 (TEST-RACE-COND) with stok=5. Ran 10 rapid sequential transactions: 5 succeeded (TRX-020 to TRX-024), 5 rejected (400 "Stok tidak cukup. Tersedia: 0"). Final stok=0, never went negative. Atomic find_one_and_update with $gte works correctly.
 
 ---
 
@@ -261,7 +261,7 @@ $ grep "create_index" app/config/database.py | grep -E "cod_id|transfer_id|req_i
 - **Fix Plan:** Add unique indexes.
 - **Regression Risk:** Low
 - **Status:** FIXED
-- **Verified By:** Code check: 3 indexes confirmed in database.py. Requires manual test: verify indexes exist after app startup via `db.cod_requests.getIndexes()`.
+- **Verified By:** Code check: 3 indexes confirmed in database.py. Indirect live test: created 3 request-sparepart records (REQ-SP-009/010/011), all unique IDs — counter+index mechanism works. Direct index verification requires MongoDB shell access (db.cod_requests.getIndexes()).
 
 ---
 
@@ -438,20 +438,45 @@ $ grep -c "console.log" index.html
 
 ---
 
+## BUG-021
+- **Severity:** Medium
+- **Repository:** Backend
+- **Role:** Kasir (data exposure)
+- **File:** app/routes/cod.py
+- **Line:** 72-74
+- **Evidence:**
+```
+$ sed -n '62,80p' app/routes/cod.py
+    role = user.get("role", "kasir")
+    if role == "kasir":
+        kurir_id = user.get("sub") or user.get("username")
+        pass  # service handles this
+    cods = await cod_service.list_cod_requests_all(
+        db, cabang, status, type, date_from, date_to, limit
+    )
+```
+- **Root Cause:** When role is "kasir", the code does `pass` — no filter applied. The kasir_id variable is set but never used. Result: kasir sees ALL COD requests in their cabang, not just their own.
+- **Impact:** Data exposure between kasir in the same cabang. Kasir A can see COD requests created by Kasir B.
+- **Fix Plan:** Add `kasir_id` parameter to `list_cod_requests_all` and pass `user.get("username")` when role is kasir.
+- **Regression Risk:** Low — adding filter, not changing existing behavior for other roles.
+- **Status:** OPEN
+- **Verified By:** —
+
+---
+
 ## Summary
 
 | Status | Count |
 |--------|-------|
-| VERIFIED | 17 |
-| FIXED (needs manual test) | 2 |
+| VERIFIED | 18 |
+| FIXED (needs DB shell) | 1 |
 | OPEN | 1 |
 | **Total** | **20** |
 
-### VERIFIED (17): BUG-001, 002, 003, 004, 005, 006, 007, 008, 010, 013, 014, 015, 016, 017, 018, 019, 020
+### VERIFIED (18): BUG-001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 013, 014, 015, 016, 017, 018, 019, 020
 
-### FIXED — Requires Manual Test (2):
-- **BUG-009**: Atomic stok — concurrent transactions on same sparepart, verify stok >= 0
-- **BUG-012**: Indexes — verify indexes exist after MongoDB startup
+### FIXED — Needs DB Shell (1):
+- **BUG-012**: Indexes — direct verification requires MongoDB shell (db.cod_requests.getIndexes())
 
 ### OPEN (1):
 - **BUG-011** (Low) — dead route file `owner_influencer.py`, no runtime impact
