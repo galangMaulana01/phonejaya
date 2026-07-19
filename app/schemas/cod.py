@@ -5,14 +5,14 @@ from datetime import datetime
 
 class CODRequestCreate(BaseModel):
     """Kasir buat COD request (Beli, Jual, atau Delivery)."""
-    type: Literal["beli", "jual", "delivery"]
+    type: Literal["beli", "jual", "delivery"]  # MUST be before kurir_id (validator depends on it)
     
     # Common fields
     location: str = "Toko"
     wa_number: str = ""
     screenshot_url: str = ""
     note: Optional[str] = None
-    kurir_id: str
+    kurir_id: Optional[str] = None  # Required for beli/jual, optional for delivery (broadcast)
     
     # Type = beli fields
     product_name: Optional[str] = None
@@ -29,6 +29,15 @@ class CODRequestCreate(BaseModel):
     def validate_type(cls, v):
         if v not in ("beli", "jual", "delivery"):
             raise ValueError("Type harus 'beli', 'jual', atau 'delivery'")
+        return v
+    
+    @field_validator("kurir_id")
+    @classmethod
+    def validate_kurir_id(cls, v, info):
+        """kurir_id required for beli/jual, optional for delivery (broadcast)."""
+        cod_type = info.data.get("type")
+        if cod_type in ("beli", "jual") and not v:
+            raise ValueError("kurir_id wajib untuk type beli/jual")
         return v
 
 

@@ -68,15 +68,26 @@ async def create_cod_request(
 ) -> CODRequestResponse:
     """Kasir buat request COD (Beli, Jual, atau Delivery)."""
     
-    # Validasi kurir ada di cabang yang sama
-    kurir = await db.users.find_one({
-        "username": payload.kurir_id,
-        "role": "Kurir",
-        "cabang": cabang,
-        "aktif": True
-    })
-    if not kurir:
-        raise HTTPException(status_code=404, detail="Kurir tidak ditemukan atau tidak aktif di cabang Anda")
+    kurir = None
+    kurir_name_val = None
+    
+    # Delivery = broadcast (no kurir assigned). Beli/jual = manual assign.
+    if payload.type == "delivery":
+        # Broadcast: kurir_id kosong, akan di-claim oleh kurir nanti
+        pass
+    else:
+        # Manual assign: validasi kurir ada di cabang yang sama
+        if not payload.kurir_id:
+            raise HTTPException(status_code=422, detail="kurir_id wajib untuk type beli/jual")
+        kurir = await db.users.find_one({
+            "username": payload.kurir_id,
+            "role": "Kurir",
+            "cabang": cabang,
+            "aktif": True
+        })
+        if not kurir:
+            raise HTTPException(status_code=404, detail="Kurir tidak ditemukan atau tidak aktif di cabang Anda")
+        kurir_name_val = kurir.get("name", payload.kurir_id)
     
     cod_id = await next_cod_id(db, cabang)
     now = datetime.now(timezone.utc)
@@ -158,8 +169,8 @@ async def create_cod_request(
         "items": items,
         "kasir_id": kasir_id,
         "kasir_name": kasir_name,
-        "kurir_id": payload.kurir_id,
-        "kurir_name": kurir.get("name", payload.kurir_id),
+        "kurir_id": payload.kurir_id if payload.type != "delivery" else None,
+        "kurir_name": kurir_name_val,
         "cabang": cabang,
         "status_history": status_history,
         "created_at": now,
@@ -186,8 +197,54 @@ async def update_cod_status(
     actor_name: str,
     note: Optional[str] = None
 ) -> CODRequestResponse:
-    """Update status COD (dipakai Kurir accept/reject/update status)."""
+    """Update status COD. Two paths:
+    1. Delivery broadcast accept: atomic claim (kurir_id was None, now assigned)
+    2. All other transitions: existing ownership check (kurir_id == actor)
+    """
     
+    now = datetime.now(timezone.utc)
+    
+    # ── PATH 1: Atomic claim for delivery broadcast ──
+    # When: delivery type, accepting (menunggu_kurir → diterima), kurir_id is null
+    if new_status == "diterima":
+        result = await db.cod_requests.find_one_and_update(
+            {
+                "cod_id": cod_id,
+                "status": "menunggu_kurir",
+                "$or": [
+                    {"kurir_id": None},
+                    {"kurir_id": {"$exists": False}}
+                ]
+            },
+            {
+                "$set": {
+                    "status": "diterima",
+                    "kurir_id": actor,
+                    "kurir_name": actor_name,
+                    "updated_at": now
+                },
+                "$push": {
+                    "status_history": {
+                        "status": "diterima",
+                        "by": actor,
+                        "by_name": actor_name,
+                        "at": now,
+                        "note": note or "Accepted via broadcast"
+                    }
+                }
+            },
+            return_document=True
+        )
+        if result:
+            await write_log(
+                db, actor, "Accept COD (broadcast)",
+                f"{cod_id} → diterima oleh {actor_name}",
+                result.get("cabang", "")
+            )
+            return _format_cod_response(result)
+        # If result is None, fall through to path 2 (might be manual-assign accept)
+    
+    # ── PATH 2: Existing ownership check (unchanged) ──
     doc = await db.cod_requests.find_one({"cod_id": cod_id})
     if not doc:
         raise HTTPException(status_code=404, detail="COD Request tidak ditemukan")
@@ -206,7 +263,6 @@ async def update_cod_status(
             detail=f"Transisi status dari '{current}' ke '{new_status}' tidak diizinkan untuk tipe {doc['type']}"
         )
     
-    now = datetime.now(timezone.utc)
     status_history = doc.get("status_history", [])
     status_history.append({
         "status": new_status,
@@ -244,9 +300,15 @@ async def list_cod_requests(
     status: Optional[str] = None,
     type_filter: Optional[str] = None
 ) -> List[CODRequestList]:
-    """Dashboard Kurir: list COD requests yang assigned ke kurir ini."""
+    """Dashboard Kurir: list COD assigned ke kurir ini + broadcast delivery."""
     
-    query = {"cabang": cabang, "kurir_id": kurir_id}
+    query = {
+        "cabang": cabang,
+        "$or": [
+            {"kurir_id": kurir_id},  # assigned to me
+            {"kurir_id": None, "type": "delivery", "status": "menunggu_kurir"}  # broadcast
+        ]
+    }
     if status:
         query["status"] = status
     if type_filter:
