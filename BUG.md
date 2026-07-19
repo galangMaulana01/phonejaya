@@ -509,6 +509,36 @@ File "app/services/cod_service.py", line 140
 
 ---
 
+## BUG-024
+- **Severity:** High
+- **Repository:** Backend + Frontend
+- **Role:** Kurir (COD delivery renders empty)
+- **File:** app/schemas/cod.py, app/services/cod_service.py, index.html
+- **Line:** cod.py:55-67, cod_service.py:412, index.html:5422-5423
+- **Evidence:**
+```
+Live response from GET /cod/kurir/dashboard:
+{
+  "type": "delivery",
+  "location": "Toko",
+  "wa_number": "",
+  "items": null,
+  "delivery_address": null,
+  "wa_customer": null,
+  "ALL KEYS": ["cod_id", "type", "status", "created_at", "location",
+               "wa_number", "screenshot_url", "product_name", "offer_price",
+               "kasir_name", "kurir_name", "kurir_id"]
+}
+```
+- **Root Cause:** `CODRequestList` schema (list endpoint response) didn't include `delivery_address`, `wa_customer`, `items` fields. These were only in `CODRequestDetail`. Also `_format_dashboard_item` didn't populate them. Frontend rendered raw field names which were all null/missing.
+- **Impact:** Kurir dashboard shows "-" for all delivery columns — feature appears broken.
+- **Fix Plan:** Add delivery fields to CODRequestList schema, update _format_dashboard_item, update frontend conditional rendering.
+- **Regression Risk:** Low — adding fields, not changing existing ones.
+- **Status:** FIXED
+- **Verified By:** Code fix applied. Requires push + live test.
+
+---
+
 ## Summary
 
 | Status | Count |

@@ -415,14 +415,17 @@ def _format_dashboard_item(doc: dict) -> CODRequestList:
         type=doc["type"],
         status=doc["status"],
         created_at=doc["created_at"].isoformat() if isinstance(doc["created_at"], datetime) else str(doc["created_at"]),
-        location=doc["location"],
-        wa_number=doc["wa_number"],
-        screenshot_url=doc["screenshot_url"],
+        location=doc.get("location", ""),
+        wa_number=doc.get("wa_number", ""),
+        screenshot_url=doc.get("screenshot_url", ""),
         product_name=doc.get("product_name"),
         offer_price=doc.get("offer_price"),
-        kasir_name=doc["kasir_name"],
+        kasir_name=doc.get("kasir_name", ""),
         kurir_name=doc.get("kurir_name"),
         kurir_id=doc.get("kurir_id"),
+        delivery_address=doc.get("delivery_address"),
+        wa_customer=doc.get("wa_customer"),
+        items=doc.get("items"),
     )
 
 

@@ -56,7 +56,7 @@ class CODStatusUpdate(BaseModel):
 class CODRequestList(BaseModel):
     """Item di list COD (Dashboard Kurir / Kasir / Owner)."""
     cod_id: str
-    type: str  # beli / jual
+    type: str  # beli / jual / delivery
     status: str
     created_at: str
     location: str
@@ -67,6 +67,9 @@ class CODRequestList(BaseModel):
     kasir_name: str
     kurir_name: Optional[str] = None
     kurir_id: Optional[str] = None
+    delivery_address: Optional[str] = None
+    wa_customer: Optional[str] = None
+    items: Optional[List[dict]] = None
 
 
 class CODRequestDetail(BaseModel):
