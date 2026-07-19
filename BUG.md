@@ -539,6 +539,28 @@ Live response from GET /cod/kurir/dashboard:
 
 ---
 
+## BUG-025
+- **Severity:** High
+- **Repository:** Backend
+- **Role:** Kurir (COD delivery status update blocked)
+- **File:** app/schemas/cod.py
+- **Line:** 45-54
+- **Evidence:**
+```
+Live test response:
+HTTP 422: Input should be 'diterima', 'ditolak', 'kurir_menuju_lokasi',
+'sudah_bertemu_penjual', 'barang_akan_dijemput', 'barang_sudah_diambil',
+'kurir_sedang_transaksi', 'transaksi_berhasil' or 'gagal'
+```
+- **Root Cause:** `CODStatusUpdate` Literal only includes beli/jual statuses. Delivery statuses (kurir_menuju_toko, sedang_diantar, terkirim) were defined in `COD_DELIVERY_FLOW` but never added to the Pydantic validation Literal. Pydantic rejects input before service-level flow validation is reached.
+- **Impact:** Kurir cannot advance COD delivery beyond "diterima" — all subsequent status updates fail with 422.
+- **Fix Plan:** Add 3 delivery statuses to CODStatusUpdate Literal.
+- **Regression Risk:** Low — adding values, not removing.
+- **Status:** FIXED
+- **Verified By:** Code fix committed (dd359ae). Requires push + live re-test.
+
+---
+
 ## Summary
 
 | Status | Count |
