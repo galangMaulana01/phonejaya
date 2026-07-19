@@ -48,7 +48,9 @@ class CODStatusUpdate(BaseModel):
         "kurir_menuju_lokasi", "sudah_bertemu_penjual",
         "barang_akan_dijemput", "barang_sudah_diambil",
         "kurir_sedang_transaksi", "transaksi_berhasil",
-        "gagal"
+        "gagal",
+        # Delivery statuses
+        "kurir_menuju_toko", "sedang_diantar", "terkirim"
     ]
     note: Optional[str] = None
 
