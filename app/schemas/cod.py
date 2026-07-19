@@ -1,5 +1,5 @@
 from pydantic import BaseModel, field_validator, HttpUrl
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Dict, Any
 from datetime import datetime
 
 
@@ -50,9 +50,22 @@ class CODStatusUpdate(BaseModel):
         "kurir_sedang_transaksi", "transaksi_berhasil",
         "gagal",
         # Delivery statuses
-        "kurir_menuju_toko", "sedang_diantar", "terkirim"
+        "kurir_menuju_toko", "sedang_diantar", "terkirim",
+        # Beli approval statuses
+        "menunggu_approval_kasir"
     ]
     note: Optional[str] = None
+
+
+class CODKurirSubmitBeli(BaseModel):
+    """Kurir submit data HP setelah bertemu penjual (type=beli)."""
+    deal_price: int  # harga jual yang disepakati
+    unit_data: Dict[str, Any]  # {imei, merk, tipe, storage, ram, warna, kondisi_hp, battery, foto_url, ...}
+
+
+class CODRejectRequest(BaseModel):
+    """Kasir reject COD dengan alasan."""
+    reason: str  # wajib diisi
 
 
 class CODRequestList(BaseModel):
@@ -72,6 +85,10 @@ class CODRequestList(BaseModel):
     delivery_address: Optional[str] = None
     wa_customer: Optional[str] = None
     items: Optional[List[dict]] = None
+    # Beli-specific
+    unit_data: Optional[Dict[str, Any]] = None
+    deal_price: Optional[int] = None
+    reject_reason: Optional[str] = None
 
 
 class CODRequestDetail(BaseModel):
@@ -92,6 +109,11 @@ class CODRequestDetail(BaseModel):
     delivery_address: Optional[str] = None
     wa_customer: Optional[str] = None
     items: Optional[List[dict]] = None
+    unit_data: Optional[Dict[str, Any]] = None
+    deal_price: Optional[int] = None
+    reject_reason: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
     kasir_id: str
     kasir_name: str
     kurir_id: Optional[str] = None

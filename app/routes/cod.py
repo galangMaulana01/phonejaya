@@ -234,6 +234,67 @@ async def kurir_input_stok(
 
 
 # ════════════════════════════════════════════════════════════════
+# KURIR SUBMIT BELI (setelah bertemu penjual)
+# ════════════════════════════════════════════════════════════════
+
+@router.post("/kurir/{cod_id}/submit-beli", response_model=dict)
+async def kurir_submit_beli(
+    cod_id: str,
+    payload: dict,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kurir),
+):
+    """Kurir submit data HP setelah nego deal (type=beli)."""
+    kurir_id = user.get("sub") or user.get("username")
+    kurir_name = user.get("name") or user.get("username")
+    
+    deal_price = payload.get("deal_price")
+    unit_data = payload.get("unit_data")
+    if not deal_price or not unit_data:
+        raise HTTPException(status_code=400, detail="deal_price dan unit_data wajib diisi")
+    
+    cod = await cod_service.submit_kurir_beli(db, cod_id, kurir_id, kurir_name, deal_price, unit_data)
+    return ok(cod.model_dump(), message=f"COD {cod_id} menunggu approval kasir")
+
+
+# ════════════════════════════════════════════════════════════════
+# KASIR APPROVE/REJECT BELI
+# ════════════════════════════════════════════════════════════════
+
+@router.post("/{cod_id}/approve", response_model=dict)
+async def approve_beli(
+    cod_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
+):
+    """Kasir approve COD beli — unit masuk inventory/teknisi."""
+    kasir_name = user.get("name") or user.get("username")
+    cabang = user.get("cabang")
+    
+    cod = await cod_service.approve_beli_cod(db, cod_id, kasir_name, cabang)
+    return ok(cod.model_dump(), message=f"COD {cod_id} disetujui — unit masuk inventory")
+
+
+@router.post("/{cod_id}/reject", response_model=dict)
+async def reject_beli(
+    cod_id: str,
+    payload: dict,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
+):
+    """Kasir reject COD beli dengan alasan."""
+    kasir_name = user.get("name") or user.get("username")
+    cabang = user.get("cabang")
+    reason = payload.get("reason", "")
+    
+    if not reason:
+        raise HTTPException(status_code=400, detail="Alasan reject wajib diisi")
+    
+    cod = await cod_service.reject_beli_cod(db, cod_id, reason, kasir_name, cabang)
+    return ok(cod.model_dump(), message=f"COD {cod_id} ditolak")
+
+
+# ════════════════════════════════════════════════════════════════
 # LOG KURIR
 # ════════════════════════════════════════════════════════════════
 

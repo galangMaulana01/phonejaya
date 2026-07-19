@@ -12,6 +12,65 @@ from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
 
 
+async def route_unit_to_inventory_or_service(
+    db: AsyncIOMotorDatabase,
+    unit_id: str,
+    unit_label: str,
+    kondisi_hp: str,
+    cabang: str,
+    actor: str,
+    keluhan: str = "",
+    sparepart_items: list = None,
+    foto_urls: list = None,
+) -> str:
+    """
+    Route unit to Inventory (Tersedia) or Service (Teknisi) based on kondisi_hp.
+    Returns: unit_status ("Tersedia" or "Service")
+    If Repair: also creates service ticket and links to unit.
+    """
+    is_repair = kondisi_hp.lower() == "repair"
+    unit_status = "Service" if is_repair else "Tersedia"
+    service_id = None
+    
+    if is_repair:
+        service_id = await next_service_id(db)
+        now = datetime.now(timezone.utc)
+        service_doc = {
+            "service_id": service_id,
+            "unit_id": unit_id,
+            "unit_label": unit_label,
+            "nama_customer": "",
+            "kontak_customer": "",
+            "keluhan": keluhan,
+            "catatan_kerusakan": "",
+            "status": "Antrian",
+            "teknisi": "",
+            "foto_urls": foto_urls or [],
+            "foto_before_urls": [],
+            "foto_after_urls": [],
+            "cabang": cabang,
+            "sparepart_items": sparepart_items or [],
+            "created_at": now,
+            "updated_at": None,
+            "created_by": actor,
+        }
+        await db.service.insert_one(service_doc)
+        
+        # Link service_id to unit
+        await db.units.update_one(
+            {"unit_id": unit_id},
+            {"$set": {"service_id": service_id, "updated_at": now}}
+        )
+        
+        await write_log(
+            db, actor, "Auto Buat Tiket Service",
+            f"{service_id} → {unit_id} • {unit_label}",
+            cabang
+        )
+    
+    return unit_status
+
+
 def _fmt(doc: dict) -> UnitResponse:
     from app.utils.formatters import fmt_waktu
     return UnitResponse(
@@ -113,7 +172,7 @@ async def create_unit(
     unit_id = await next_unit_id(db, payload.kat_kode, payload.kondisi_kode, payload.cabang)
     now = datetime.now(timezone.utc)
 
-    # Status berdasarkan kondisi HP
+    # Status berdasarkan kondisi HP (via reusable routing function)
     is_repair = payload.kondisi_hp == KondisiHP.repair
     status    = "Service" if is_repair else "Tersedia"
 
@@ -158,42 +217,17 @@ async def create_unit(
         payload.cabang
     )
 
-    # Kalau Repair → auto-create tiket service
+    # Kalau Repair → auto-create tiket service via reusable routing function
     if is_repair:
-        service_id = await next_service_id(db)
-        service_doc = {
-            "service_id":       service_id,
-            "unit_id":          unit_id,
-            "unit_label":       (f"{payload.merk} {payload.tipe} {payload.storage}" + (f" {payload.ram}" if payload.ram and payload.ram != "-" else "")),
-            "nama_customer":    "",
-            "kontak_customer":  "",
-            "keluhan":          payload.keluhan,
-            "catatan_kerusakan": "",
-            "status":           "Antrian",
-            "teknisi":          "",
-            "foto_urls":        [],
-            "foto_before_urls": [],
-            "foto_after_urls":  [],
-            "cabang":           payload.cabang,
-            "sparepart_items":  [{"sp_id": s.sp_id, "jumlah": s.jumlah} for s in payload.sparepart_items] if payload.sparepart_items else [],
-            "created_at":       now,
-            "updated_at":       None,
-            "created_by":       actor,
-        }
-        await db.service.insert_one(service_doc)
-
-        # Simpan service_id di unit
-        await db.units.update_one(
-            {"unit_id": unit_id},
-            {"$set": {"service_id": service_id}}
+        unit_label = f"{payload.merk} {payload.tipe} {payload.storage}" + (f" {payload.ram}" if payload.ram and payload.ram != "-" else "")
+        sp_items = [{"sp_id": s.sp_id, "jumlah": s.jumlah} for s in payload.sparepart_items] if payload.sparepart_items else []
+        await route_unit_to_inventory_or_service(
+            db, unit_id, unit_label, "Repair", payload.cabang, actor,
+            keluhan=payload.keluhan, sparepart_items=sp_items
         )
-        doc["service_id"] = service_id
-
-        await write_log(
-            db, actor, "Auto Buat Tiket Service",
-            f"{service_id} → {unit_id} • {payload.merk} {payload.tipe}",
-            payload.cabang
-        )
+        # Get the service_id that was just created
+        svc = await db.service.find_one({"unit_id": unit_id})
+        doc["service_id"] = svc["service_id"] if svc else None
 
     return _fmt(doc)
 

@@ -17,7 +17,8 @@ COD_BELI_FLOW = {
     "diterima": ["kurir_menuju_lokasi"],
     "kurir_menuju_lokasi": ["sudah_bertemu_penjual", "ditolak"],
     "sudah_bertemu_penjual": ["input_stok", "ditolak"],
-    "input_stok": ["selesai"],
+    "input_stok": ["menunggu_approval_kasir"],
+    "menunggu_approval_kasir": ["selesai", "ditolak"],  # approve → selesai, reject → ditolak
     "selesai": [],
     "ditolak": [],
 }
@@ -396,6 +397,211 @@ async def get_kurir_list(db: AsyncIOMotorDatabase, cabang: str) -> List[KurirLis
     cursor = db.users.find({"role": "Kurir", "cabang": cabang, "aktif": True})
     kurirs = await cursor.to_list(length=None)
     return [KurirListItem(kurir_id=k["username"], kurir_name=k.get("name", k["username"]), cabang=k["cabang"]) for k in kurirs]
+
+
+async def approve_beli_cod(
+    db: AsyncIOMotorDatabase,
+    cod_id: str,
+    kasir_name: str,
+    cabang: str,
+) -> CODRequestResponse:
+    """
+    Kasir approve COD beli — atomic via find_one_and_update.
+    Creates unit + routes to inventory or service based on kondisi_hp.
+    Idempotent: double-click safe.
+    """
+    now = datetime.now(timezone.utc)
+    
+    # Atomic: only succeeds if status is menunggu_approval_kasir
+    doc = await db.cod_requests.find_one_and_update(
+        {
+            "cod_id": cod_id,
+            "status": "menunggu_approval_kasir",
+            "type": "beli",
+        },
+        {
+            "$set": {
+                "status": "selesai",
+                "approved_by": kasir_name,
+                "approved_at": now,
+                "updated_at": now,
+            },
+            "$push": {
+                "status_history": {
+                    "status": "selesai",
+                    "by": kasir_name,
+                    "at": now,
+                    "note": "Approved by kasir"
+                }
+            }
+        },
+        return_document=True
+    )
+    
+    if not doc:
+        raise HTTPException(status_code=409, detail="COD sudah diapprove atau tidak dalam status menunggu approval")
+    
+    # Get unit_data from COD document
+    unit_data = doc.get("unit_data", {})
+    if not unit_data:
+        raise HTTPException(status_code=400, detail="Data unit tidak ditemukan di COD")
+    
+    # Create unit in inventory
+    from app.utils.id_generator import next_unit_id
+    from app.services.unit_service import route_unit_to_inventory_or_service
+    
+    kat_kode = unit_data.get("kat_kode", "AI")
+    kondisi_kode = unit_data.get("kondisi_kode", "BN")
+    unit_id = await next_unit_id(db, kat_kode, kondisi_kode, cabang)
+    
+    # Determine kondisi_hp for routing
+    kondisi_hp = unit_data.get("kondisi_hp", "Mulus")
+    deal_price = doc.get("deal_price", 0)
+    
+    unit_doc = {
+        "unit_id": unit_id,
+        "merk": unit_data.get("merk", ""),
+        "tipe": unit_data.get("tipe", ""),
+        "storage": unit_data.get("storage", "-"),
+        "ram": unit_data.get("ram", "-"),
+        "warna": unit_data.get("warna", "-"),
+        "imei": unit_data.get("imei", "-"),
+        "imei2": unit_data.get("imei2", "-"),
+        "tipe_sim": unit_data.get("tipe_sim", "Single SIM"),
+        "keamanan": unit_data.get("keamanan", "Tidak Ada"),
+        "speaker": unit_data.get("speaker", "Normal"),
+        "lcd": unit_data.get("lcd", "Original"),
+        "harga_modal": 0,
+        "harga_jual": 0 if kondisi_hp == "Repair" else deal_price,
+        "kondisi": unit_data.get("kondisi", "Normal"),
+        "kondisi_hp": kondisi_hp,
+        "battery": unit_data.get("battery", 100),
+        "battery_health": unit_data.get("battery_health", 0),
+        "status": "Service" if kondisi_hp == "Repair" else "Tersedia",
+        "kategori": unit_data.get("kategori", "Android"),
+        "catatan": f"COD Beli {doc['cod_id']}",
+        "cabang": cabang,
+        "locked": True,
+        "garansi_toko": 7,
+        "created_at": now,
+        "created_by": kasir_name,
+        "tgl_terjual": None,
+        "service_id": None,
+        "foto_url": unit_data.get("foto_url"),
+        "input_by_role": "Kurir (COD Beli)",
+    }
+    
+    await db.units.insert_one(unit_doc)
+    
+    # Route to inventory or service
+    unit_label = f"{unit_doc['merk']} {unit_doc['tipe']} {unit_doc['storage']}"
+    await route_unit_to_inventory_or_service(
+        db, unit_id, unit_label, kondisi_hp, cabang, kasir_name,
+        keluhan=unit_data.get("keluhan", "")
+    )
+    
+    await write_log(
+        db, kasir_name, "Approve COD Beli",
+        f"{doc['cod_id']} → Unit {unit_id} ({kondisi_hp}) → {'Tersedia' if kondisi_hp != 'Repair' else 'Service'}",
+        cabang
+    )
+    
+    return _format_cod_response(doc)
+
+
+async def reject_beli_cod(
+    db: AsyncIOMotorDatabase,
+    cod_id: str,
+    reason: str,
+    kasir_name: str,
+    cabang: str,
+) -> CODRequestResponse:
+    """Kasir reject COD beli with reason."""
+    now = datetime.now(timezone.utc)
+    
+    doc = await db.cod_requests.find_one_and_update(
+        {
+            "cod_id": cod_id,
+            "status": "menunggu_approval_kasir",
+            "type": "beli",
+        },
+        {
+            "$set": {
+                "status": "ditolak",
+                "reject_reason": reason,
+                "updated_at": now,
+            },
+            "$push": {
+                "status_history": {
+                    "status": "ditolak",
+                    "by": kasir_name,
+                    "at": now,
+                    "note": reason
+                }
+            }
+        },
+        return_document=True
+    )
+    
+    if not doc:
+        raise HTTPException(status_code=409, detail="COD tidak dalam status menunggu approval")
+    
+    await write_log(
+        db, kasir_name, "Reject COD Beli",
+        f"{cod_id} → Ditolak: {reason}",
+        cabang
+    )
+    
+    return _format_cod_response(doc)
+
+
+async def submit_kurir_beli(
+    db: AsyncIOMotorDatabase,
+    cod_id: str,
+    kurir_id: str,
+    kurir_name: str,
+    deal_price: int,
+    unit_data: dict,
+) -> CODRequestResponse:
+    """Kurir submit data HP setelah bertemu penjual (type=beli)."""
+    now = datetime.now(timezone.utc)
+    
+    doc = await db.cod_requests.find_one_and_update(
+        {
+            "cod_id": cod_id,
+            "status": "sudah_bertemu_penjual",
+            "kurir_id": kurir_id,
+        },
+        {
+            "$set": {
+                "status": "menunggu_approval_kasir",
+                "deal_price": deal_price,
+                "unit_data": unit_data,
+                "updated_at": now,
+            },
+            "$push": {
+                "status_history": {
+                    "status": "menunggu_approval_kasir",
+                    "by": kurir_id,
+                    "by_name": kurir_name,
+                    "at": now,
+                    "note": f"Deal price: {deal_price}"
+                }
+            }
+        },
+        return_document=True
+    )
+    
+    if not doc:
+        raise HTTPException(status_code=409, detail="COD tidak bisa disubmit — status atau kurir tidak sesuai")
+    
+    await write_log(
+        db, kurir_name, "Submit COD Beli",
+        f"{cod_id} → Deal {deal_price} • {unit_data.get('merk', '')} {unit_data.get('tipe', '')}",
+        doc.get("cabang", "")
+    )
+    
+    return _format_cod_response(doc)
 
 
 # Helper functions
