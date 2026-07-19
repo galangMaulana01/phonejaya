@@ -137,7 +137,7 @@ async def create_cod_request(
         # Build items dari transaksi
         if trx.get("unit_id"):
             items.append({"type": "unit", "unit_id": trx["unit_id"], "label": trx.get("unit_label", "")})
-        for sp in trx.get("sp_items", []):
+        for sp in (trx.get("sp_items") or []):
             items.append({"type": "sparepart", "sp_id": sp.get("sp_id", ""), "nama": sp.get("nama", ""), "jumlah": sp.get("jumlah", 1)})
         
         delivery_address = payload.delivery_address or ""
@@ -263,7 +263,7 @@ async def update_cod_status(
             detail=f"Transisi status dari '{current}' ke '{new_status}' tidak diizinkan untuk tipe {doc['type']}"
         )
     
-    status_history = doc.get("status_history", [])
+    status_history = doc.get("status_history") or []
     status_history.append({
         "status": new_status,
         "by": actor,
@@ -387,7 +387,7 @@ async def get_cod_detail(
         kasir_name=doc["kasir_name"],
         kurir_id=doc.get("kurir_id"),
         kurir_name=doc.get("kurir_name"),
-        status_history=doc.get("status_history", []),
+        status_history=doc.get("status_history") or [],
     )
 
 

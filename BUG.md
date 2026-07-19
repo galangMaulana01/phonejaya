@@ -464,6 +464,51 @@ $ sed -n '62,80p' app/routes/cod.py
 
 ---
 
+## BUG-022
+- **Severity:** Critical
+- **Repository:** Frontend
+- **Role:** Kasir (COD delivery broken)
+- **File:** main.js
+- **Line:** 398 (missing)
+- **Evidence:**
+```
+$ grep -n "create" main.js | grep "cod"
+(no output — method does not exist)
+$ grep -n "API.cod.create" index.html
+3109:    await API.cod.create({
+```
+- **Root Cause:** `API.cod` object in main.js has no `create` method. Backend endpoint `POST /cod` exists but the frontend client wrapper was never added. `index.html:3109` calls `API.cod.create(...)` which throws "is not a function".
+- **Impact:** Kasir cannot create COD delivery — entire feature broken.
+- **Fix Plan:** Add `create: function(b) { return request('POST', '/cod', b); }` to API.cod in main.js.
+- **Regression Risk:** Low — adding missing method, no existing behavior changed.
+- **Status:** FIXED
+- **Verified By:** grep confirms `create` method now present in main.js line 399. Requires push + live test.
+
+---
+
+## BUG-023
+- **Severity:** Critical
+- **Repository:** Backend
+- **Role:** Kasir (COD delivery crash on unit-only transaction)
+- **File:** app/services/cod_service.py
+- **Line:** 140
+- **Evidence:**
+```
+Vercel function log:
+TypeError: 'NoneType' object is not iterable
+File "app/services/cod_service.py", line 140
+    for sp in trx.get("sp_items", [])
+```
+- **Root Cause:** `transaksi_service.py:200` stores `sp_items: None` when transaction has no spareparts. `trx.get("sp_items", [])` returns `None` (not `[]`) because the key EXISTS with value None. The default `[]` only applies when key is MISSING. This bug was not caught in earlier testing because the test transaction happened to include spareparts.
+- **Impact:** COD delivery creation crashes for any transaction that contains only a unit HP without spareparts.
+- **Fix Plan:** Change `trx.get("sp_items", [])` to `(trx.get("sp_items") or [])`. Also fix similar patterns for `status_history` in same file.
+- **Regression Risk:** Low — safe pattern works for all 3 cases (key missing, value None, value []).
+- **Status:** FIXED
+- **Verified By:** Code fix applied. Requires push + live test with 3 scenarios.
+- **Test Coverage Lesson:** Earlier testing only tested with sparepart transactions. Must test all data variants: unit-only, sparepart-only, mixed.
+
+---
+
 ## Summary
 
 | Status | Count |
