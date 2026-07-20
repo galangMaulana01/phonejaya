@@ -61,6 +61,10 @@ async def update_service(
     db:    AsyncIOMotorDatabase = Depends(get_db),
     user:  dict = Depends(require_teknisi_or_owner),
 ):
+    # Kurir tidak boleh update service — role mereka adalah COD delivery
+    if user.get("role") == "kurir":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Kurir tidak bisa update service")
     item = await service_service.update_service(
         db, service_id, body,
         actor=user.get("name", user.get("username", "")),

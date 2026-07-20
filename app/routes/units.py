@@ -65,7 +65,12 @@ async def approve_repair(
     if user.get("role") == "teknisi":
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Teknisi tidak bisa approve repair")
-    unit = await unit_service.approve_repair(db, unit_id, body, actor=user.get("name", user.get("username", "")))
+    unit = await unit_service.approve_repair(
+        db, unit_id, body,
+        actor=user.get("name", user.get("username", "")),
+        user_cabang=user.get("cabang", ""),
+        user_role=user.get("role", ""),
+    )
     return ok(unit.model_dump(), message=f"Unit {unit_id} disetujui → masuk stok Tersedia")
 
 

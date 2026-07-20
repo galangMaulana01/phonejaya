@@ -237,51 +237,62 @@ async def approve_repair(
     unit_id: str,
     payload: ApproveRepairRequest,
     actor: str,
+    user_cabang: str = "",
+    user_role: str = "",
 ) -> UnitResponse:
     """
     Kasir / Owner approve unit setelah teknisi selesai repair.
     Set harga jual → unit pindah ke stok Tersedia.
     Hanya bisa dilakukan kalau service sudah Selesai.
     """
-    unit = await db.units.find_one({"unit_id": unit_id})
+    # Build query with cabang filter for non-owner
+    query = {"unit_id": unit_id}
+    if user_role != "owner" and user_cabang:
+        query["cabang"] = user_cabang
+
+    # Atomic: only approve if unit is Service + Repair + matching cabang
+    now = datetime.now(timezone.utc)
+    unit = await db.units.find_one_and_update(
+        {
+            "unit_id": unit_id,
+            "kondisi_hp": "Repair",
+            "status": "Service",
+            **({"cabang": user_cabang} if user_role != "owner" and user_cabang else {}),
+        },
+        {"$set": {
+            "harga_jual":  payload.harga_jual,
+            "status":      "Tersedia",
+            "approved_by": actor,
+            "approved_at": now,
+            "updated_at":  now,
+        }},
+        return_document=True,
+    )
     if not unit:
-        raise HTTPException(status_code=404, detail=f"Unit {unit_id} tidak ditemukan")
-
-    if unit.get("kondisi_hp") != "Repair":
-        raise HTTPException(
-            status_code=400,
-            detail="Unit ini bukan unit repair. Tidak perlu approval."
-        )
-
-    if unit.get("status") != "Service":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unit tidak dalam status Service (status saat ini: {unit['status']})"
-        )
+        # Diagnostic: find out why it failed
+        existing = await db.units.find_one({"unit_id": unit_id})
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Unit {unit_id} tidak ditemukan")
+        if user_role != "owner" and existing.get("cabang") != user_cabang:
+            raise HTTPException(status_code=403, detail="Unit bukan milik cabang Anda")
+        if existing.get("kondisi_hp") != "Repair":
+            raise HTTPException(status_code=400, detail="Unit ini bukan unit repair. Tidak perlu approval.")
+        raise HTTPException(status_code=400, detail=f"Unit tidak dalam status Service (status: {existing['status']})")
 
     # Cek tiket service sudah Selesai
     service_id = unit.get("service_id")
     if service_id:
         svc = await db.service.find_one({"service_id": service_id})
         if svc and svc.get("status") not in ("Selesai", "Approved"):
+            # Rollback unit status back to Service
+            await db.units.update_one(
+                {"_id": unit["_id"], "status": "Tersedia"},
+                {"$set": {"status": "Service", "updated_at": datetime.now(timezone.utc)}}
+            )
             raise HTTPException(
                 status_code=400,
                 detail=f"Tiket service belum selesai (status: {svc.get('status')}). Teknisi harus update dulu ke Selesai."
             )
-
-    now = datetime.now(timezone.utc)
-
-    # Update unit → Tersedia + set harga jual
-    await db.units.update_one(
-        {"unit_id": unit_id},
-        {"$set": {
-            "harga_jual":   payload.harga_jual,
-            "status":       "Tersedia",
-            "approved_by":  actor,
-            "approved_at":  now,
-            "updated_at":   now,
-        }}
-    )
 
     # Update service → Approved
     if service_id:

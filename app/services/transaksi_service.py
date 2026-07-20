@@ -69,8 +69,9 @@ async def create_transaksi(
 
     # ── Process unit (if any) ──
     if has_unit:
+        # Atomic claim with cabang — prevents cross-branch sale + double-click
         unit = await db.units.find_one_and_update(
-            {"unit_id": payload.unit_id, "status": "Tersedia"},
+            {"unit_id": payload.unit_id, "cabang": cabang, "status": "Tersedia"},
             {"$set": {"status": "Sold", "tgl_terjual": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},
             return_document=False,
         )
@@ -78,14 +79,18 @@ async def create_transaksi(
             existing = await db.units.find_one({"unit_id": payload.unit_id})
             if not existing:
                 raise HTTPException(status_code=404, detail="Unit tidak ditemukan")
+            if existing.get("cabang") != cabang:
+                raise HTTPException(status_code=403, detail="Unit bukan milik cabang kamu")
             raise HTTPException(status_code=409, detail=f"Unit tidak tersedia (status: {existing['status']})")
 
-        if unit.get("cabang") != cabang:
-            await db.units.update_one({"unit_id": payload.unit_id}, {"$set": {"status": "Tersedia"}})
-            raise HTTPException(status_code=403, detail="Unit bukan milik cabang kamu")
+        # Validate IMEI (after claim, before proceeding)
         if unit.get("imei") and unit["imei"] != "-":
             if payload.imei.strip() != unit["imei"]:
-                await db.units.update_one({"unit_id": payload.unit_id}, {"$set": {"status": "Tersedia"}})
+                # Safe rollback: only if still Sold (our claim)
+                await db.units.update_one(
+                    {"_id": unit["_id"], "status": "Sold"},
+                    {"$set": {"status": "Tersedia"}}
+                )
                 raise HTTPException(status_code=422, detail="IMEI tidak sesuai. Periksa kembali.")
 
         total_jual_unit = unit["harga_jual"] + payload.biaya_garansi

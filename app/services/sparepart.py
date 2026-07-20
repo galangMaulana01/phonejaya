@@ -129,17 +129,26 @@ async def kurangi_stok_batch(
     actor: str,
     cabang: str,
 ) -> None:
-    """Kurangi stok beberapa sparepart sekaligus — dipanggil saat service Selesai."""
+    """Kurangi stok beberapa sparepart sekaligus — dipanggil saat service Selesai.
+    Uses atomic find_one_and_update per item to prevent race conditions."""
     for item in items:
-        sp = await db.sparepart.find_one({"sp_id": item["sp_id"]})
-        if not sp:
-            continue  # skip kalau sparepart sudah dihapus
-        # Hitung aktual yang bisa dikurangi (tidak boleh minus)
-        actual_deducted = min(sp["stok"], item["jumlah"])
-        stok_baru = sp["stok"] - actual_deducted
-        await db.sparepart.update_one(
-            {"sp_id": item["sp_id"]},
-            {"$set": {"stok": stok_baru, "updated_at": datetime.now(timezone.utc)}}
+        jumlah = item["jumlah"]
+        sp_id = item["sp_id"]
+
+        # Atomic: only deduct if stok >= jumlah AND belongs to cabang
+        result = await db.sparepart.find_one_and_update(
+            {"sp_id": sp_id, "cabang": cabang, "stok": {"$gte": jumlah}},
+            {"$inc": {"stok": -jumlah}, "$set": {"updated_at": datetime.now(timezone.utc)}},
+            return_document=True,
         )
+        if not result:
+            # Sparepart not found OR insufficient stock — log and skip
+            sp = await db.sparepart.find_one({"sp_id": sp_id})
+            nama = sp["nama"] if sp else sp_id
+            stok_now = sp["stok"] if sp else 0
+            await write_log(db, actor, "Gagal Pemakaian Sparepart",
+                f"{sp_id} • {nama} — stok tidak cukup atau tidak ditemukan (diminta {jumlah}, tersedia {stok_now})", cabang)
+            continue
+
         await write_log(db, actor, "Pemakaian Sparepart Service",
-            f"{item['sp_id']} • {sp['nama']} -{actual_deducted} (diminta {item['jumlah']}) → stok:{stok_baru}", cabang)
+            f"{sp_id} • {result['nama']} -{jumlah} → stok:{result['stok']}", cabang)

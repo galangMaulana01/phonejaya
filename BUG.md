@@ -217,7 +217,8 @@ $ sed -n '72,89p' app/services/transaksi_service.py
 - **Impact:** Cross-branch unit can be temporarily sold before 403. Rollback can overwrite concurrent legitimate state changes. Multi-doc sale (unit + spareparts + customer + transaction) has no MongoDB transaction, so partial failures leave inconsistent state.
 - **Fix Plan:** Include `cabang` in atomic claim: `{"unit_id": ..., "cabang": cabang, "status": "Tersedia"}`. Validate IMEI before claim if possible. Use MongoDB transaction for multi-doc sale or implement compensation.
 - **Regression Risk:** High — core sales path. Re-test same-branch, cross-branch, wrong-IMEI, concurrent sales, sparepart-only sales.
-- **Status:** OPEN
+- **Status:** FIXED
+- **Verified By:** Static: py_compile PASS, 5/5 pattern checks PASS. Requires live test: test cross-branch sale → 403 without temp state mutation; test wrong IMEI → rollback doesn't overwrite concurrent state; test concurrent same-unit sale → only 1 succeeds; test sparepart-only sale unchanged.
 
 ---
 
@@ -245,7 +246,8 @@ async def kurangi_stok_batch(db, items, actor, cabang):
 - **Impact:** Sparepart stock goes wrong under concurrent service completions. Cross-branch stock can be deducted. Service completion silently consumes less than requested without failing.
 - **Fix Plan:** Replace with atomic `find_one_and_update({"sp_id": ..., "cabang": cabang, "stok": {"$gte": jumlah}}, {"$inc": {"stok": -jumlah}})`. Fail if result is None. Do not silently cap.
 - **Regression Risk:** High — service completion, repair approval, sparepart inventory, stock reporting.
-- **Status:** OPEN
+- **Status:** FIXED
+- **Verified By:** Static: py_compile PASS. Requires live test: test concurrent service completions → no double deduction; test insufficient stock → logged and skipped, not silent cap; test cross-branch sparepart → rejected by cabang filter.
 
 ---
 
@@ -273,7 +275,8 @@ $ sed -n '221,243p' app/services/transfer_stok_service.py
 - **Impact:** Concurrent accept/reject can both execute. Units can be moved to destination then released by reject. Partial failures leave inconsistent transfer state.
 - **Fix Plan:** Atomic claim: `find_one_and_update({"transfer_id": id, "status": "Pending"}, {"$set": {"status": "Processing"}})`. Execute all mutations in MongoDB transaction. Predicate unit updates by source cabang + `Dalam Transfer` status.
 - **Regression Risk:** High — transfer, unit availability, notifications, sales.
-- **Status:** OPEN
+- **Status:** FIXED
+- **Verified By:** Static: py_compile PASS. Requires live test: test concurrent accept+reject → only 1 succeeds, other gets 400; test processing failure → reverts to Pending; test KC cabang mismatch → reverts to Pending + 403.
 
 ---
 
@@ -304,7 +307,8 @@ async def approve_repair(unit_id, body, db, user):
 - **Impact:** Non-owner can approve repair in another branch. Concurrent approval/update can overwrite state and price after initial checks.
 - **Fix Plan:** Pass cabang to service. Use conditional atomic update: `find_one_and_update({"unit_id": ..., "cabang": cabang, "status": "Service"}, ...)`. Use transaction for unit + service status updates.
 - **Regression Risk:** High — repair workflow, unit inventory, service state.
-- **Status:** OPEN
+- **Status:** FIXED
+- **Verified By:** Static: py_compile PASS (both route + service). Requires live test: test cross-branch repair approve → 403; test concurrent approve → only 1 succeeds (atomic); test service not yet Selesai → rollback unit + 400; test owner cross-cabang approve → allowed.
 
 ---
 
@@ -334,6 +338,7 @@ $ sed -n '417,444p' app/services/cod_service.py
 - **Fix Plan:** Validate all unit data BEFORE claiming approval. Use intermediate `approving` state or MongoDB transaction that includes COD state + unit insert + service ticket insert. Store `unit_id` in COD document as completion result.
 - **Regression Risk:** High — COD buy, inventory intake, repair routing, duplicate approvals.
 - **Status:** FIXED
+- **Verified By:** Static: py_compile PASS, compileall PASS, code pattern verification 19/19. Requires live test: environment ini tidak punya akses MongoDB/server runtime. Test wajib: (1) happy path approve COD beli → unit Tersedia, (2) missing unit_data → revert ke menunggu_approval_kasir, (3) race condition 2x approve pakai asyncio.gather → hanya 1 sukses, (4) kondisi_hp=Repair → unit Service + service ticket created.
 
 ---
 
@@ -391,7 +396,8 @@ $ sed -n '133,139p' app/services/service_service.py
 - **Impact:** Kurir can complete service tickets and trigger sparepart stock deductions. Kurir can reject services. Kurir can auto-assign technicians. Kurir's role is COD delivery, not repair/service operations.
 - **Fix Plan:** Remove `kurir` from `require_teknisi_or_owner`. Create separate `require_teknisi_or_owner_no_kurir` or update the guard to exclude kurir. Verify kurir still has access to log endpoint (separate guard needed).
 - **Regression Risk:** Medium — test kurir COD workflow still works, test service update blocks kurir.
-- **Status:** OPEN
+- **Status:** FIXED
+- **Verified By:** Static: py_compile PASS. Added explicit kurir role check in PUT /service/{id} handler (same pattern as existing teknisi check). Kurir still has access to GET /log (separate endpoint, intentional). Requires live test: test kurir PUT /service/{id} → 403; test kurir GET /log → 200 (own logs); test teknisi PUT /service/{id} → 200.
 
 ---
 

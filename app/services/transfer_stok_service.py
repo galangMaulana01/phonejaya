@@ -218,18 +218,34 @@ async def respond_transfer(
     user_role: str,
     user_cabang: Optional[str],
 ) -> TransferStokResponse:
-    doc = await db.transfer_stok.find_one({"transfer_id": transfer_id})
+    # ══ Step 1: Atomic claim — prevents concurrent processing ══
+    doc = await db.transfer_stok.find_one_and_update(
+        {
+            "transfer_id": transfer_id,
+            "status": "Pending",
+        },
+        {
+            "$set": {"status": "Processing", "updated_at": datetime.now(timezone.utc)},
+        },
+        return_document=True,
+    )
     if not doc:
-        raise HTTPException(status_code=404, detail=f"Transfer {transfer_id} tidak ditemukan")
-
-    if doc["status"] != "Pending":
+        # Check if exists but already processed
+        existing = await db.transfer_stok.find_one({"transfer_id": transfer_id})
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Transfer {transfer_id} tidak ditemukan")
         raise HTTPException(
             status_code=400,
-            detail=f"Transfer sudah direspon sebelumnya (status: {doc['status']})"
+            detail=f"Transfer sudah direspon sebelumnya (status: {existing['status']})"
         )
 
     # Kepala cabang hanya bisa respon transfer yang ditujukan ke cabangnya
     if user_role == "kepala_cabang" and user_cabang != doc["cabang_tujuan"]:
+        # Revert — revert ke Pending (bukan stuck di Processing)
+        await db.transfer_stok.update_one(
+            {"transfer_id": transfer_id, "status": "Processing"},
+            {"$set": {"status": "Pending", "updated_at": datetime.now(timezone.utc)}}
+        )
         raise HTTPException(
             status_code=403,
             detail="Kamu hanya bisa merespon transfer yang ditujukan ke cabangmu"
@@ -237,18 +253,31 @@ async def respond_transfer(
 
     now = datetime.now(timezone.utc)
 
-    if payload.status == StatusTransferEnum.diterima:
-        await _proses_terima(db, doc, actor, now)
-    else:
-        await _proses_tolak(db, doc, actor, payload.catatan, now)
+    # ══ Step 2: Process accept/reject ══
+    try:
+        if payload.status == StatusTransferEnum.diterima:
+            await _proses_terima(db, doc, actor, now)
+        else:
+            await _proses_tolak(db, doc, actor, payload.catatan, now)
+    except Exception:
+        # Revert to Pending on processing failure
+        await db.transfer_stok.update_one(
+            {"transfer_id": transfer_id, "status": "Processing"},
+            {"$set": {"status": "Pending", "updated_at": datetime.now(timezone.utc)}}
+        )
+        raise
 
+    # ══ Step 3: Finalize — set terminal status with predicate ══
     update = {
         "status":        payload.status.value,
         "catatan_respon": payload.catatan,
         "direspon_oleh": actor,
         "updated_at":    now,
     }
-    await db.transfer_stok.update_one({"transfer_id": transfer_id}, {"$set": update})
+    await db.transfer_stok.update_one(
+        {"transfer_id": transfer_id, "status": "Processing"},
+        {"$set": update}
+    )
 
     updated = await db.transfer_stok.find_one({"transfer_id": transfer_id})
     return _fmt(updated)
