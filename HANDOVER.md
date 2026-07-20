@@ -1,100 +1,71 @@
 # HANDOVER.md — Phonejaya / Jayaphone
 
-Generated: 2026-07-20 (Full Re-Audit Complete)
+Last Updated: 2026-07-21 (Full Re-Audit Session)
 
 ---
 
-## Audit Summary
+## PROJECT STATUS: NEEDS RE-VERIFICATION
 
-| Metric | Value |
-|--------|-------|
-| Files audited | 40+ (all .py, .js, .html) |
-| Bugs found (total) | 41 |
-| Bugs from prev session | 28 (001-028) |
-| New bugs found | 14 (029-042) |
-| Bugs FIXED this session | 10 (029, 030, 031, 032, 033, 034, 036, 037, 040, 041) |
-| Bugs VERIFIED this session | 18 (from prev session) |
-| Bugs still OPEN | 4 (035, 038, 039, 042) |
-| Bugs SUSPECTED | 1 (039) |
+### Architecture
+- **Backend:** FastAPI + Motor (async MongoDB), deployed on Vercel (serverless)
+- **Frontend:** SPA (vanilla JS) — NOT in this repo. Lives separately.
+- **DB:** MongoDB Atlas (14 collections, unique indexes on most)
+- **Auth:** JWT, 9 role guards (owner, kepala_cabang, kasir, teknisi, kurir, influencer, + combos)
+- **API prefix:** `/api/v1`
+- **Domain:** jayaphone.vercel.app / phonejaya.vercel.app
 
----
+### Key Metrics
+- 2534 .py files (including venv)
+- ~40 route/service/schema files in app/
+- 15 registered routers
+- 1 dead route (owner_influencer.py — not imported)
+- 161 tests (trading-pure only — phonejaya has NO test suite)
+- compileall: PASS
 
-## What Was Fixed This Session
+### Bug Status Summary (BUG.md v3)
+- **VERIFIED:** 21 bugs (001-010, 013-020, 029) — all from previous sessions
+- **FIXED Needs Live Test:** 8 bugs (011, 012, 021-028)
+- **OPEN (New This Session):** 11 bugs (040-050) — 10 HIGH, 1 CRITICAL GAP
+- **SUSPECTED:** 2 items (customer merge needs product decision, architecture note on transactions)
+- **Status Corrections:** BUG-031, 032, 033 → VERIFIED (code was fixed in commit 0b3c731)
+- **Architecture Note:** MongoDB transactions NOT in scope — atomic single-doc ops sufficient for current scale
 
-| Bug | Severity | Fix | File |
-|-----|----------|-----|------|
-| BUG-029 | HIGH | `db.logs` → `db.log` (wrong collection) | cod.py:328 |
-| BUG-030 | MEDIUM | Customer listing now filtered by cabang | customer_service.py, customer.py |
-| BUG-031 | MEDIUM | Transaction auto-customer now gets cabang | transaksi_service.py:140 |
-| BUG-032 | MEDIUM | unit_detail now validates cabang ownership | units.py:83-85 |
-| BUG-033 | HIGH | Legacy sparepart transaction now atomic | transaksi_service.py:229-233 |
-| BUG-034 | MEDIUM | COD status update PATH 2 now atomic | cod_service.py:277-291 |
-| BUG-036+040 | HIGH | COD approve/reject now validates cabang | cod_service.py:418, 527 |
-| BUG-037 | HIGH | create_unit now forces cabang from user | units.py:45-47 |
-| BUG-041 | MEDIUM | sparepart update_stok now atomic | sparepart.py:104-118 |
+### Critical Blockers
+1. **BUG-049 (CRITICAL GAP):** Frontend absent from this repository. All backend "VERIFIED" claims lack UI evidence. Must confirm frontend repo location and run UI verification.
+2. **BUG-044 (HIGH):** Unit sale atomic claim missing cabang — core sales path.
+3. **BUG-045-048 (HIGH):** Non-atomic multi-doc operations in service completion, transfer, repair approval, COD approval.
 
----
+### What's Solid
+- Auth middleware works correctly for role enforcement
+- Atomic counter generation (find_one_and_update with $inc)
+- COD broadcast claim uses atomic find_one_and_update
+- Transaction sparepart decrement (BUG-033 area) now atomic
+- Customer list now filtered by cabang (BUG-030)
+- Unit detail now has cabang check (BUG-032)
+- Auto-created customer now has cabang (BUG-031)
+- Kurir log collection name fixed (BUG-029)
 
-## What's Still OPEN
+### What Needs Fix
+| Priority | Area | Bugs |
+|----------|------|------|
+| P0 | Frontend gap | BUG-049 |
+| P1 | COD approval orphan | BUG-048 |
+| P1 | Unit sale race | BUG-044 |
+| P1 | Service stock | BUG-045 |
+| P1 | Transfer atomic | BUG-046 |
+| P1 | Repair approval | BUG-047 |
+| P1 | Kurir RBAC | BUG-050 |
+| P2 | Cross-branch disclosure | BUG-040, 041, 042 |
+| P2 | Cloudinary auth | BUG-043 |
 
-| Bug | Severity | Description | Next Step |
-|-----|----------|-------------|-----------|
-| BUG-035 | MEDIUM | approve_beli unit+routing not atomic (partial state on failure) | Add try/except rollback |
-| BUG-038 | LOW | Dead route owner_influencer.py not deleted | Manual file deletion |
-| BUG-039 | SUSPECTED | upload.delete uses POST not DELETE | Verify backend route behavior |
-| BUG-042 | MEDIUM | kurangi_stok_batch read-then-write | Refactor to atomic |
+### Dependencies
+- No test suite exists — all verification is ad-hoc grep/read/curl
+- Frontend is in a separate repo (not confirmed which)
+- MongoDB Atlas — no local DB for integration testing
 
----
-
-## Architecture Summary
-
-- **Backend**: FastAPI + Motor (async MongoDB) on Vercel serverless
-- **Frontend**: SPA (index.html 5941 lines + main.js 436 lines + svg.js 150 lines)
-- **DB**: MongoDB Atlas with 14 collections, unique indexes on all ID fields
-- **Auth**: JWT 7-day expiry, bcrypt password hashing, 9 RBAC guards
-- **Roles**: owner, kepala_cabang, kasir, teknisi, kurir, influencer
-- **Deploy**: Vercel (serverless), CORS whitelisted
-
----
-
-## Critical Patterns Verified
-
-1. ✅ JWT expiry check in auth middleware
-2. ✅ Atomic stock decrement in main create_transaksi (BUG-009)
-3. ✅ Atomic stock decrement in legacy create_transaksi_sparepart (BUG-033, NEW)
-4. ✅ Atomic sparepart update_stok (BUG-041, NEW)
-5. ✅ Atomic COD broadcast claim (PATH 1)
-6. ✅ Atomic COD status transition (PATH 2, BUG-034, NEW)
-7. ✅ Cabang ownership in COD approve/reject (BUG-036, NEW)
-8. ✅ Cabang injection prevention in create_unit (BUG-037, NEW)
-9. ✅ Cabang ownership in unit_detail (BUG-032, NEW)
-10. ✅ Customer cabang filtering (BUG-030, NEW)
-
----
-
-## Regression Test Checklist
-
-Before deploying, verify:
-1. [ ] Login as each role (owner, KC, kasir, teknisi, kurir, influencer)
-2. [ ] Create unit as kasir → verify cabang forced from JWT
-3. [ ] View unit detail as kasir from different cabang → verify 403
-4. [ ] Create transaction with sparepart → verify atomic stock check
-5. [ ] Create COD delivery → verify kurir log returns data
-6. [ ] Approve COD beli from wrong cabang → verify 409
-7. [ ] Update sparepart stok (decrement) → verify atomic
-8. [ ] List customers as kasir → verify only own cabang
-9. [ ] Create transaction with auto-customer → verify cabang set
-
----
-
-## Files Modified This Session
-
-```
-app/routes/cod.py              — BUG-029: db.logs → db.log
-app/routes/units.py            — BUG-037: force cabang, BUG-032: cabang check
-app/routes/customer.py         — BUG-030: pass cabang to list_customer
-app/services/cod_service.py    — BUG-036+040: cabang in approve/reject, BUG-034: atomic PATH 2
-app/services/customer_service.py — BUG-030: cabang parameter
-app/services/transaksi_service.py — BUG-033: atomic legacy sparepart, BUG-031: cabang in auto-customer
-app/services/sparepart.py      — BUG-041: atomic update_stok
-```
+### Next Steps (Awaiting User Approval)
+1. Fix P1 bugs (044-048) — these are code changes affecting state machines
+2. Fix P2 bugs (040-043, 047) — ownership/routing fixes
+3. Confirm frontend repo → run UI verification
+4. Create FRONTEND_MAP.md
+5. Create REPOSITORY.md v2 with accurate current state

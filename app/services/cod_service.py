@@ -18,7 +18,8 @@ COD_BELI_FLOW = {
     "kurir_menuju_lokasi": ["sudah_bertemu_penjual", "ditolak"],
     "sudah_bertemu_penjual": ["input_stok", "ditolak"],
     "input_stok": ["menunggu_approval_kasir"],
-    "menunggu_approval_kasir": ["selesai", "ditolak"],  # approve → selesai, reject → ditolak
+    "menunggu_approval_kasir": ["processing_approval", "ditolak"],  # approve → claim, reject → ditolak
+    "processing_approval": ["selesai", "menunggu_approval_kasir"],  # finalize or revert on failure
     "selesai": [],
     "ditolak": [],
 }
@@ -407,59 +408,65 @@ async def approve_beli_cod(
     cabang: str,
 ) -> CODRequestResponse:
     """
-    Kasir approve COD beli — atomic via find_one_and_update.
-    Creates unit + routes to inventory or service based on kondisi_hp.
-    Idempotent: double-click safe.
+    Kasir approve COD beli — atomic claim → validate → create unit → finalize.
+    Double-click safe via atomic processing_approval claim.
+    Reverts to menunggu_approval_kasir on any failure.
     """
     now = datetime.now(timezone.utc)
-    
-    # Atomic: only succeeds if status is menunggu_approval_kasir AND same cabang
+
+    # ══ Step 1: Atomic claim — prevents double-click ══
     doc = await db.cod_requests.find_one_and_update(
         {
             "cod_id": cod_id,
             "status": "menunggu_approval_kasir",
             "type": "beli",
-            "cabang": cabang,  # Validate cabang ownership
+            "cabang": cabang,
         },
         {
             "$set": {
-                "status": "selesai",
-                "approved_by": kasir_name,
-                "approved_at": now,
+                "status": "processing_approval",
                 "updated_at": now,
             },
             "$push": {
                 "status_history": {
-                    "status": "selesai",
+                    "status": "processing_approval",
                     "by": kasir_name,
                     "at": now,
-                    "note": "Approved by kasir"
+                    "note": "Processing approval"
                 }
             }
         },
-        return_document=True
+        return_document=True,
     )
-    
+
     if not doc:
         raise HTTPException(status_code=409, detail="COD sudah diapprove atau tidak dalam status menunggu approval")
-    
-    # Get unit_data from COD document
+
+    # ══ Helper: revert status on failure ══
+    async def _revert(reason: str):
+        await db.cod_requests.update_one(
+            {"cod_id": cod_id, "status": "processing_approval"},
+            {"$set": {"status": "menunggu_approval_kasir", "updated_at": datetime.now(timezone.utc)}}
+        )
+        await write_log(db, kasir_name, "Gagal Approve COD Beli", f"{cod_id}: {reason}", cabang)
+
+    # ══ Step 2: Validate unit_data ══
     unit_data = doc.get("unit_data", {})
     if not unit_data:
+        await _revert("Data unit tidak ditemukan di COD")
         raise HTTPException(status_code=400, detail="Data unit tidak ditemukan di COD")
-    
-    # Create unit in inventory
+
+    # ══ Step 3: Create unit ══
     from app.utils.id_generator import next_unit_id
     from app.services.unit_service import route_unit_to_inventory_or_service
-    
+
     kat_kode = unit_data.get("kat_kode", "AI")
     kondisi_kode = unit_data.get("kondisi_kode", "BN")
     unit_id = await next_unit_id(db, kat_kode, kondisi_kode, cabang)
-    
-    # Determine kondisi_hp for routing
+
     kondisi_hp = unit_data.get("kondisi_hp", "Mulus")
     deal_price = doc.get("deal_price", 0)
-    
+
     unit_doc = {
         "unit_id": unit_id,
         "merk": unit_data.get("merk", ""),
@@ -492,23 +499,56 @@ async def approve_beli_cod(
         "foto_url": unit_data.get("foto_url"),
         "input_by_role": "Kurir (COD Beli)",
     }
-    
-    await db.units.insert_one(unit_doc)
-    
-    # Route to inventory or service
-    unit_label = f"{unit_doc['merk']} {unit_doc['tipe']} {unit_doc['storage']}"
-    await route_unit_to_inventory_or_service(
-        db, unit_id, unit_label, kondisi_hp, cabang, kasir_name,
-        keluhan=unit_data.get("keluhan", "")
+
+    try:
+        await db.units.insert_one(unit_doc)
+    except Exception as e:
+        await _revert(f"Gagal membuat unit: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal membuat unit: {str(e)}")
+
+    # ══ Step 4: Route to inventory or service ══
+    try:
+        unit_label = f"{unit_doc['merk']} {unit_doc['tipe']} {unit_doc['storage']}"
+        await route_unit_to_inventory_or_service(
+            db, unit_id, unit_label, kondisi_hp, cabang, kasir_name,
+            keluhan=unit_data.get("keluhan", "")
+        )
+    except Exception as e:
+        await _revert(f"Gagal routing unit: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal routing unit: {str(e)}")
+
+    # ══ Step 5: Finalize — set selesai + store unit_id ══
+    now_final = datetime.now(timezone.utc)
+    await db.cod_requests.update_one(
+        {"cod_id": cod_id, "status": "processing_approval"},
+        {
+            "$set": {
+                "status": "selesai",
+                "approved_by": kasir_name,
+                "approved_at": now_final,
+                "updated_at": now_final,
+                "unit_id": unit_id,
+            },
+            "$push": {
+                "status_history": {
+                    "status": "selesai",
+                    "by": kasir_name,
+                    "at": now_final,
+                    "note": f"Approved — Unit {unit_id} ({kondisi_hp})"
+                }
+            }
+        }
     )
-    
+
     await write_log(
         db, kasir_name, "Approve COD Beli",
         f"{doc['cod_id']} → Unit {unit_id} ({kondisi_hp}) → {'Tersedia' if kondisi_hp != 'Repair' else 'Service'}",
         cabang
     )
-    
-    return _format_cod_response(doc)
+
+    # Fetch updated doc for response
+    updated_doc = await db.cod_requests.find_one({"cod_id": cod_id})
+    return _format_cod_response(updated_doc)
 
 
 async def reject_beli_cod(
