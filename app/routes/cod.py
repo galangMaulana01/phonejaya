@@ -321,17 +321,17 @@ async def kurir_log(
             wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
         if date_to:
             wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
-        query["created_at"] = wf
+        query["waktu"] = wf
     if action:
         query["aksi"] = {"$regex": action, "$options": "i"}
     
-    cursor = db.log.find(query).sort("created_at", -1).limit(limit)
+    cursor = db.log.find(query).sort("waktu", -1).limit(limit)
     logs = await cursor.to_list(length=limit)
     
     return ok([
         {
             "id": str(log["_id"]),
-            "waktu": log["created_at"].isoformat() if isinstance(log["created_at"], datetime) else str(log["created_at"]),
+            "waktu": log["waktu"].isoformat() if isinstance(log["waktu"], datetime) else str(log["waktu"]),
             "user": log.get("user"),
             "aksi": log.get("aksi"),
             "detail": log.get("detail"),
