@@ -471,3 +471,55 @@ grep -n 'find_one({"transfer_id"' app/services/transfer_stok_service.py
 grep -n 'find_one({"unit_id"' app/services/unit_service.py
 grep -n '"status": "selesai"' app/services/cod_service.py
 ```
+
+---
+
+## BUG-051 [NEW] — White Input Fields in COD Delivery Form
+- **Severity:** Medium (P2)
+- **Repository:** Frontend
+- **Role:** Kasir
+- **File:** `index.html:2887,2891`
+- **Evidence:** Fields used `class="input"` (literal CSS class) instead of `class="${input}"` (JS template variable with Tailwind dark theme classes). Same issue in 21 other input fields across COD Beli form and kurir submit-beli modal.
+- **Root Cause:** COD delivery fields were added later and used literal class name instead of the JS variable that provides dark theme styling.
+- **Impact:** White/bright input fields that clash with dark theme, breaking visual consistency.
+- **Fix Plan:** Replace all `class="input"` with `class="${input}"` in template literals.
+- **Regression Risk:** Low — purely cosmetic change to match existing input style.
+- **Status:** FIXED
+
+---
+
+## BUG-052 [NEW] — COD Beli Broken Icon (Smartphone SVG)
+- **Severity:** Low (P3)
+- **Repository:** Frontend
+- **Role:** Kasir
+- **File:** `index.html:2752`
+- **Evidence:** `${smartphoneSvg}` rendered inside `<p>` tag without proper inline wrapper, causing SVG to clip or not render.
+- **Root Cause:** SVG was inline in paragraph text without `inline-block` wrapper, causing layout issues.
+- **Fix Plan:** Wrap SVG in `<span class="inline-block align-middle mr-1">`.
+- **Regression Risk:** Low — purely cosmetic.
+- **Status:** FIXED
+
+---
+
+## BUG-053 [NEW] — COD Beli Should Use Broadcast (Not Manual Kurir Assign)
+- **Severity:** High (P1)
+- **Repository:** Backend + Frontend
+- **Role:** Kasir, Kurir
+- **Files:** `app/schemas/cod.py:34-40`, `app/services/cod_service.py:73-92,306-311`, `index.html:5729-5770`
+- **Evidence:**
+```
+Schema validator: if cod_type in ("beli", "jual") and not v: raise ValueError
+Service: if payload.type == "delivery": pass else: validate kurir_id
+Kurir dashboard: {"kurir_id": None, "type": "delivery", "status": "menunggu_kurir"}
+Frontend: <select id="cb-kurir"> + if (!kurir) { showToast('Pilih kurir') }
+```
+- **Root Cause:** COD Beli was designed with manual kurir assignment, but requirement is broadcast (same as delivery).
+- **Impact:** Kasir must manually pick kurir for every COD Beli, defeating the broadcast/first-come-first-served pattern.
+- **Fix Plan:**
+  1. Schema: kurir_id now only required for "jual", optional for "beli"/"delivery"
+  2. Service: beli treated as broadcast (no kurir validation)
+  3. Kurir dashboard: show broadcast beli jobs (`type: {$in: ["delivery", "beli"]}`)
+  4. Frontend: removed kurir dropdown from COD Beli form
+- **Regression Risk:** Medium — COD jual must still require kurir. Need live test.
+- **Status:** FIXED
+- **Verified By:** Static: py_compile PASS, compileall PASS. Requires live test: (1) Kasir buat COD Beli tanpa pilih kurir → sukses, (2) Muncul di dashboard SEMUA kurir cabang, (3) 1 kurir accept → lain dapat 409, (4) COD jual masih wajib pilih kurir.

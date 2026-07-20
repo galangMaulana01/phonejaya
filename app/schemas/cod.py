@@ -34,10 +34,10 @@ class CODRequestCreate(BaseModel):
     @field_validator("kurir_id")
     @classmethod
     def validate_kurir_id(cls, v, info):
-        """kurir_id required for beli/jual, optional for delivery (broadcast)."""
+        """kurir_id required for jual only, optional for beli/delivery (broadcast)."""
         cod_type = info.data.get("type")
-        if cod_type in ("beli", "jual") and not v:
-            raise ValueError("kurir_id wajib untuk type beli/jual")
+        if cod_type == "jual" and not v:
+            raise ValueError("kurir_id wajib untuk type jual")
         return v
 
 

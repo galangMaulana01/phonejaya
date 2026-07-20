@@ -73,14 +73,12 @@ async def create_cod_request(
     kurir = None
     kurir_name_val = None
     
-    # Delivery = broadcast (no kurir assigned). Beli/jual = manual assign.
-    if payload.type == "delivery":
-        # Broadcast: kurir_id kosong, akan di-claim oleh kurir nanti
-        pass
-    else:
-        # Manual assign: validasi kurir ada di cabang yang sama
+    # Broadcast: beli & delivery = no kurir assigned, will be claimed by kurir.
+    # Jual only = manual assign.
+    if payload.type == "jual":
+        # Manual assign: validate kurir exists in same cabang
         if not payload.kurir_id:
-            raise HTTPException(status_code=422, detail="kurir_id wajib untuk type beli/jual")
+            raise HTTPException(status_code=422, detail="kurir_id wajib untuk type jual")
         kurir = await db.users.find_one({
             "username": payload.kurir_id,
             "role": "Kurir",
@@ -309,7 +307,7 @@ async def list_cod_requests(
         "cabang": cabang,
         "$or": [
             {"kurir_id": kurir_id},  # assigned to me
-            {"kurir_id": None, "type": "delivery", "status": "menunggu_kurir"}  # broadcast
+            {"kurir_id": None, "type": {"$in": ["delivery", "beli"]}, "status": "menunggu_kurir"}  # broadcast
         ]
     }
     if status:
