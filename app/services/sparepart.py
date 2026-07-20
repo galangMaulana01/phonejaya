@@ -98,19 +98,28 @@ async def update_stok(
     if user_role == 'kepala_cabang' and sp.get('cabang') != user_cabang:
         raise HTTPException(status_code=403, detail='Sparepart bukan milik cabangmu')
 
-    stok_baru = sp["stok"] + payload.delta
-    if stok_baru < 0:
-        raise HTTPException(status_code=400, detail=f"Stok tidak cukup. Stok saat ini: {sp['stok']}")
-
     now = datetime.now(timezone.utc)
-    await db.sparepart.update_one(
-        {"sp_id": sp_id},
-        {"$set": {"stok": stok_baru, "updated_at": now}}
-    )
+    if payload.delta < 0:
+        # Atomic decrement with stok check
+        result = await db.sparepart.find_one_and_update(
+            {"sp_id": sp_id, "stok": {"$gte": abs(payload.delta)}},
+            {"$inc": {"stok": payload.delta}, "$set": {"updated_at": now}},
+            return_document=False,
+        )
+        if not result:
+            raise HTTPException(status_code=400, detail=f"Stok tidak cukup. Stok saat ini: {sp['stok']}")
+    else:
+        # Atomic increment
+        await db.sparepart.find_one_and_update(
+            {"sp_id": sp_id},
+            {"$inc": {"stok": payload.delta}, "$set": {"updated_at": now}},
+            return_document=False,
+        )
+    
     updated = await db.sparepart.find_one({"sp_id": sp_id})
     aksi = "tambah" if payload.delta > 0 else "kurangi"
     await write_log(db, actor, "Update Stok Sparepart",
-        f"{sp_id} • {sp['nama']} {aksi} {abs(payload.delta)} → stok:{stok_baru}", sp.get("cabang",""))
+        f"{sp_id} • {sp['nama']} {aksi} {abs(payload.delta)} → stok:{updated['stok']}", sp.get("cabang",""))
     return _fmt(updated)
 
 

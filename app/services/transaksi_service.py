@@ -137,7 +137,8 @@ async def create_transaksi(
             new_customer = await create_customer(db,
                 __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
                     nama=payload.customer_nama.strip(),
-                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else ""
+                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
+                    cabang=cabang
                 ),
                 actor=kasir_name
             )
@@ -221,21 +222,24 @@ async def create_transaksi_sparepart(
         sp = await db.sparepart.find_one({"sp_id": item.sp_id})
         if not sp:
             raise HTTPException(status_code=404, detail=f"Sparepart {item.sp_id} tidak ditemukan")
-        if sp["stok"] < item.jumlah:
+        if sp.get("cabang") != cabang:
+            raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
+
+        # Atomic check-and-decrement to prevent race condition
+        result = await db.sparepart.find_one_and_update(
+            {"sp_id": item.sp_id, "stok": {"$gte": item.jumlah}},
+            {"$inc": {"stok": -item.jumlah}, "$set": {"updated_at": datetime.now(timezone.utc)}},
+            return_document=False,
+        )
+        if not result:
             raise HTTPException(
                 status_code=400,
                 detail=f"Stok {sp['nama']} tidak cukup. Tersedia: {sp['stok']}, diminta: {item.jumlah}"
             )
-        if sp.get("cabang") != cabang:
-            raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
+
         total_jual  += sp["harga_jual"]  * item.jumlah
         total_modal += sp["harga_beli"]  * item.jumlah
         labels.append(f"{sp['nama']} x{item.jumlah}")
-
-        await db.sparepart.update_one(
-            {"sp_id": item.sp_id},
-            {"$set": {"stok": sp["stok"] - item.jumlah, "updated_at": datetime.now(timezone.utc)}}
-        )
 
     trx_id = await next_trx_id(db, cabang=cabang)
     now    = datetime.now(timezone.utc)

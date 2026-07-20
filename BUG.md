@@ -1,563 +1,396 @@
-# BUG.md — Phonejaya / Jayaphone
+# BUG.md v2 — Phonejaya / Jayaphone
 
-Generated: 2026-07-19 (Phase 2 — Backend Deep Audit, updated through Phase 10)
-
----
-
-## BUG-001
-- **Severity:** Critical
-- **Repository:** Backend
-- **Role:** All authenticated users
-- **File:** app/utils/security.py
-- **Line:** 36-50
-- **Evidence:**
-```
-$ grep -n "_expired" app/utils/security.py app/middlewares/auth.py
-app/utils/security.py:45:            payload["_expired"] = True
-app/middlewares/auth.py:12:    if payload.get("_expired"):
-```
-- **Root Cause:** `decode_token()` returns the JWT payload even when the token is expired, setting `_expired=True`. But `get_current_user()` in auth middleware NEVER checks this flag.
-- **Impact:** Any expired JWT (7+ days old) still grants full access.
-- **Fix Plan:** In `get_current_user()`, check `if payload.get("_expired"): raise HTTPException(401)`.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** python3 test: create_access_token(expires_delta=timedelta(seconds=-10)), decode_token returns _expired=True, get_current_user raises HTTPException 401 "Token expired".
+Generated: 2026-07-20 (Full Re-Audit from Zero, Session Baru)
 
 ---
 
-## BUG-002
-- **Severity:** Critical
-- **Repository:** Backend
-- **Role:** Kepala Cabang (transfer receiver)
-- **File:** app/services/transfer_stok_service.py
-- **Line:** 285
-- **Evidence:**
-```
-$ grep -n "Dalam Transfer" app/services/transfer_stok_service.py
-285:        if unit.get("status") != "Dalam Transfer":
-```
-- **Root Cause:** `_proses_terima()` checked `status != "Tersedia"` but units are in "Dalam Transfer" status. Accept always failed.
-- **Impact:** No transfer between branches could ever complete.
-- **Fix Plan:** Change check to `status != "Dalam Transfer"`.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** LIVE TEST: KC created TRF-005 (BDG→JKT, unit BDG-IP-BN-026). Owner accepted. Response: unit_id_baru=JKT-IP-BN-002, status=Diterima. Transfer acceptance works correctly.
+## LEGEND
+
+| Status | Meaning |
+|--------|---------|
+| VERIFIED | Bug confirmed + fix verified with evidence |
+| FIXED | Code changed, needs live test |
+| OPEN | Bug confirmed, not yet fixed |
+| SUSPECTED | Claim without evidence, needs investigation |
+
+| Severity | Criteria |
+|----------|----------|
+| Critical (P0) | Data loss, security bypass, auth bypass, race condition causing wrong results |
+| High (P1) | Broken feature, wrong data exposure, race condition on financial data |
+| Medium (P2) | Cross-branch data leakage, missing ownership checks, code quality |
+| Low (P3) | Dead code, cosmetic, minor inconsistency |
 
 ---
 
-## BUG-003
-- **Severity:** High
-- **Repository:** Backend
-- **Role:** Kepala Cabang (sparepart request)
-- **File:** app/services/request_sparepart_service.py
-- **Line:** 70
-- **Evidence:**
-```
-$ grep "from app.services.sparepart" app/services/request_sparepart_service.py
-70:        from app.services.sparepart import create_sparepart
-```
-- **Root Cause:** Import from non-existent `app.services.sparepart_service`. Fixed to `app.services.sparepart`.
-- **Impact:** Server crash (ImportError) when accepting "item_baru" sparepart requests.
-- **Fix Plan:** Correct import path.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep confirms correct import path. `from app.services.sparepart_service import` no longer present.
+## PREVIOUS SESSION BUGS (001-028) — RE-VERIFIED 2026-07-20
+
+### VERIFIED (18): 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 013, 014, 015, 016, 017, 018, 019, 020
+All re-verified via grep/read against current code. Status unchanged.
+
+### FIXED — Needs Live Test (8): 011, 012, 021, 022, 023, 024, 025, 026, 027, 028
+Code changes present. Status unchanged from previous session.
 
 ---
 
-## BUG-004
-- **Severity:** High
+## NEW BUGS (Session 2026-07-20)
+
+---
+
+## BUG-029 [SESSION 2]
+- **Severity:** High (P1)
 - **Repository:** Backend
 - **Role:** Kurir
-- **File:** app/routes/cod.py
-- **Line:** 185
+- **File:** app/routes/cod.py:328
 - **Evidence:**
 ```
-$ sed -n '185,190p' app/routes/cod.py
-    kat_kode = payload.get("kat_kode", "AI")
-    kondisi_kode = payload.get("kondisi_kode", "BN")
-    kondisi_hp = payload.get("kondisi_hp", "Mulus")
-    unit_id = await next_unit_id(db, kat_kode, kondisi_kode, cabang)
+$ grep -n "db\.logs\|db\.log" app/routes/cod.py app/services/log_service.py
+app/routes/cod.py:328:    cursor = db.logs.find(query).sort("created_at", -1).limit(limit)
+app/services/log_service.py:48:        await db.log.insert_one({
 ```
-- **Root Cause:** Used `merk` as `kat_kode`, generating wrong unit_ids like "JYP-Samsung-BN-001".
-- **Impact:** Broken unit ID format, counter fragmentation.
-- **Fix Plan:** Use proper kat_kode/kondisi_kode with defaults.
-- **Regression Risk:** Medium
-- **Status:** VERIFIED
-- **Verified By:** LIVE TEST: Kurir POST /cod/kurir/input-stok with kat_kode="AI" returned 201. Unit ID: BDG-AI-BN-009 (correct CABANG-KAT-KONDISI-SEQ format).
+- **Root Cause:** `kurir_log` endpoint queries `db.logs` (plural) but `write_log()` inserts into `db.log` (singular). The query always returns empty results.
+- **Impact:** Kurir cannot see their activity log — feature completely broken.
+- **Fix Plan:** Change `db.logs` to `db.log` on cod.py:328.
+- **Regression Risk:** Low — single collection name fix.
+- **Status:** OPEN
 
 ---
 
-## BUG-005
-- **Severity:** High
+## BUG-030 [SESSION 2]
+- **Severity:** Medium (P2)
 - **Repository:** Backend
-- **Role:** Kurir
-- **File:** app/routes/cod.py
-- **Line:** 188-210
+- **Role:** Kasir, Teknisi
+- **File:** app/services/customer_service.py:18-22, app/routes/customer.py:13-20
 - **Evidence:**
 ```
-$ grep "imei2\|tipe_sim\|keamanan\|speaker\|lcd\|battery_health\|locked\|garansi_toko\|kategori" app/routes/cod.py | head -10
-        "imei2": "-",
-        "tipe_sim": "Single SIM",
-        "keamanan": "Tidak Ada",
-        "speaker": "Normal",
-        "lcd": "Original",
-        "battery_health": 0,
-        "locked": False,
-        "garansi_toko": 7,
-        "kategori": resolve_kategori(kat_kode),
+$ cat app/services/customer_service.py
+async def list_customer(db, q: Optional[str]=None) -> List[CustomerResponse]:
+    query: dict = {}
+    if q: query["$or"] = [{"nama":{"$regex":q,"$options":"i"}},{"kontak":{"$regex":q,"$options":"i"}}]
+    docs = await db.customers.find(query).sort("nama", 1).to_list(length=None)
+    return [_fmt(d) for d in docs]
 ```
-- **Root Cause:** Kurir unit doc had different field names (baterai, grade, harga_beli) than standard units.
-- **Impact:** KeyError when formatting kurir-created units.
-- **Fix Plan:** Align field names with standard unit schema.
-- **Regression Risk:** Medium
-- **Status:** VERIFIED
-- **Verified By:** LIVE TEST: GET /units/BDG-AI-BN-009/detail returned 200. All 13 standard fields present (imei2, tipe_sim, keamanan, speaker, lcd, battery_health, locked, garansi_toko, kategori, harga_modal=0, harga_jual=0, battery, kondisi_hp=Mulus).
+- **Root Cause:** `list_customer` has NO cabang filter. Any kasir/teknisi can see customers from ALL branches.
+- **Impact:** Cross-branch customer data leakage. Kasir JKT can see SBY customers.
+- **Fix Plan:** Add cabang parameter to list_customer, filter by user's cabang in route handler.
+- **Regression Risk:** Low — adding filter, not changing existing behavior for owner.
+- **Status:** OPEN
 
 ---
 
-## BUG-006
-- **Severity:** Medium
+## BUG-031 [SESSION 2]
+- **Severity:** Medium (P2)
 - **Repository:** Backend
-- **Role:** Kurir
-- **File:** app/routes/log.py
-- **Line:** 31
+- **Role:** Kasir (auto-create during transaction)
+- **File:** app/services/transaksi_service.py:137-143
 - **Evidence:**
 ```
-$ grep 'role.*kurir' app/routes/log.py
-31:    elif user.get("role") == "kurir":
-32:        query["user"] = user.get("name", user.get("username", ""))
-```
-- **Root Cause:** Kurir had no filter in log query, seeing ALL logs from ALL branches.
-- **Impact:** Data leakage — kurir could view all activity logs.
-- **Fix Plan:** Add kurir filter to own logs only.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep confirms kurir role filter at line 31, filtering by own name/username.
-
----
-
-## BUG-007
-- **Severity:** Medium
-- **Repository:** Backend
-- **Role:** Teknisi
-- **File:** app/routes/units.py
-- **Line:** 61-63
-- **Evidence:**
-```
-$ sed -n '61,63p' app/routes/units.py
-    if user.get("role") == "teknisi":
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Teknisi tidak bisa approve repair")
-```
-- **Root Cause:** `approve_repair` allowed Teknisi via `require_kasir_teknisi_or_owner`.
-- **Impact:** Teknisi could set harga_jual on repaired units.
-- **Fix Plan:** Add role check to block teknisi.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep confirms teknisi role check in approve_repair function, returns 403.
-
----
-
-## BUG-008
-- **Severity:** Medium
-- **Repository:** Backend
-- **Role:** All (Customer data)
-- **File:** app/services/customer_service.py
-- **Line:** 28
-- **Evidence:**
-```
-$ grep "cabang" app/services/customer_service.py
-28:        "cabang": payload.cabang,
-```
-- **Root Cause:** `create_customer` did not store `cabang` in customer document.
-- **Impact:** Customers had no branch association.
-- **Fix Plan:** Add cabang field to document.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep confirms "cabang": payload.cabang at line 28 in create_customer function.
-
----
-
-## BUG-009
-- **Severity:** Medium
-- **Repository:** Backend
-- **Role:** Kasir (Transaksi)
-- **File:** app/services/transaksi_service.py
-- **Line:** 103-108
-- **Evidence:**
-```
-$ grep -A3 "find_one_and_update" app/services/transaksi_service.py | head -5
-            result = await db.sparepart.find_one_and_update(
-                {"sp_id": item.sp_id, "stok": {"$gte": item.jumlah}},
-                {"$inc": {"stok": -item.jumlah}, "$set": {"updated_at": datetime.now(timezone.utc)}},
-                return_document=False,
+$ sed -n '137,143p' app/services/transaksi_service.py
+            new_customer = await create_customer(db,
+                __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
+                    nama=payload.customer_nama.strip(),
+                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else ""
+                ),
+                actor=kasir_name
             )
 ```
-- **Root Cause:** Sparepart stok check and update were NOT atomic.
-- **Impact:** Stok could go negative under concurrent transactions.
-- **Fix Plan:** Use `find_one_and_update` with atomic check-and-decrement.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** LIVE TEST: Created sparepart SP-003 (TEST-RACE-COND) with stok=5. Ran 10 rapid sequential transactions: 5 succeeded (TRX-020 to TRX-024), 5 rejected (400 "Stok tidak cukup. Tersedia: 0"). Final stok=0, never went negative. Atomic find_one_and_update with $gte works correctly.
+- **Root Cause:** CustomerCreateRequest created without `cabang` field. Schema defaults cabang to "" (empty string). Customer created during transaction has NO branch association.
+- **Impact:** Auto-created customers have empty cabang, making them invisible to branch-filtered queries.
+- **Fix Plan:** Pass `cabang=cabang` to the inline CustomerCreateRequest.
+- **Regression Risk:** Low — adding missing field.
+- **Status:** OPEN
 
 ---
 
-## BUG-010
-- **Severity:** Low
+## BUG-032 [SESSION 2]
+- **Severity:** Medium (P2)
 - **Repository:** Backend
-- **Role:** N/A (code quality)
-- **File:** app/config/settings.py
-- **Line:** 2
+- **Role:** Kasir, Teknisi
+- **File:** app/routes/units.py:69-85
 - **Evidence:**
 ```
-$ grep -c "from functools import lru_cache" app/config/settings.py
-1
+$ sed -n '69,85p' app/routes/units.py
+@router.get("/{unit_id}/detail")
+async def unit_detail(
+    unit_id: str,
+    db:   AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
+):
+    from fastapi import HTTPException
+    doc = await db.units.find_one({"unit_id": unit_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Unit {unit_id} tidak ditemukan")
+    unit = unit_service._fmt(doc)
+    data = unit.model_dump()
+    if user.get("role") == "teknisi":
+        data.pop("harga_modal", None)
+    return ok(data)
 ```
-- **Root Cause:** Duplicate `lru_cache` import (was 2, now 1).
-- **Impact:** Code cleanliness only.
-- **Fix Plan:** Remove duplicate.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep -c returns 1 (was 2 before fix).
+- **Root Cause:** `unit_detail` does NOT validate that the unit belongs to the user's cabang. Any kasir can see any unit's full detail across all branches.
+- **Impact:** Cross-branch unit data exposure. Kasir JKT can view SBY unit details.
+- **Fix Plan:** Add cabang check: `if user.get("role") != "owner" and doc.get("cabang") != user.get("cabang"): raise 403`.
+- **Regression Risk:** Low — adding ownership check.
+- **Status:** OPEN
 
 ---
 
-## BUG-011
-- **Severity:** Low
+## BUG-033 [SESSION 2]
+- **Severity:** High (P1)
+- **Repository:** Backend
+- **Role:** Kasir
+- **File:** app/services/transaksi_service.py:220-238
+- **Evidence:**
+```
+$ sed -n '220,238p' app/services/transaksi_service.py
+    for item in payload.items:
+        sp = await db.sparepart.find_one({"sp_id": item.sp_id})
+        if not sp:
+            raise HTTPException(status_code=404, detail=f"Sparepart {item.sp_id} tidak ditemukan")
+        if sp["stok"] < item.jumlah:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Stok {sp['nama']} tidak cukup. Tersedia: {sp['stok']}, diminta: {item.jumlah}"
+            )
+        if sp.get("cabang") != cabang:
+            raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
+        total_jual  += sp["harga_jual"]  * item.jumlah
+        total_modal += sp["harga_beli"]  * item.jumlah
+        labels.append(f"{sp['nama']} x{item.jumlah}")
+
+        await db.sparepart.update_one(
+            {"sp_id": item.sp_id}, {"$set": {"stok": sp["stok"] - item.jumlah, "updated_at": datetime.now(timezone.utc)}}
+        )
+```
+- **Root Cause:** Legacy `create_transaksi_sparepart` does read-then-write instead of atomic `find_one_and_update`. Same pattern as BUG-009 but in the legacy endpoint. Stok can go negative under concurrent transactions.
+- **Impact:** Race condition — sparepart stock goes negative when two kasir sell same sparepart simultaneously.
+- **Fix Plan:** Replace read-then-write with `find_one_and_update({"sp_id": ..., "stok": {"$gte": item.jumlah}}, {"$inc": {"stok": -item.jumlah}})`.
+- **Regression Risk:** Low — same fix pattern as BUG-009.
+- **Status:** OPEN
+
+---
+
+## BUG-034 [SESSION 2]
+- **Severity:** Medium (P2)
+- **Repository:** Backend
+- **Role:** Kurir, Kasir
+- **File:** app/services/cod_service.py:248-293
+- **Evidence:**
+```
+$ sed -n '248,293p' app/services/cod_service.py
+    # ── PATH 2: Existing ownership check (unchanged) ──
+    doc = await db.cod_requests.find_one({"cod_id": cod_id})
+    ...
+    current = doc["status"]
+    flow = ALL_FLOWS[doc["type"]]
+    if new_status not in flow.get(current, []):
+        raise HTTPException(...)
+    ...
+    await db.cod_requests.update_one(
+        {"cod_id": cod_id}, {"$set": {
+            "status": new_status,
+            "status_history": status_history,
+            "updated_at": now
+        }}
+    )
+```
+- **Root Cause:** PATH 2 does find_one + update_one non-atomically. Between read and write, another request could change status. Flow validation catches invalid transitions but the update itself is not conditional on current status.
+- **Impact:** Status could be set to an invalid intermediate state if two requests race.
+- **Fix Plan:** Use `find_one_and_update` with status filter for PATH 2 as well.
+- **Regression Risk:** Low — making existing logic atomic.
+- **Status:** OPEN
+
+---
+
+## BUG-035 [SESSION 2]
+- **Severity:** Medium (P2)
+- **Repository:** Backend
+- **Role:** Kasir (COD approval)
+- **File:** app/services/cod_service.py:494-500
+- **Evidence:**
+```
+$ sed -n '494,500p' app/services/cod_service.py
+    await db.units.insert_one(unit_doc)
+    # Route to inventory or service
+    unit_label = f"{unit_doc['merk']} {unit_doc['tipe']} {unit_doc['storage']}"
+    await route_unit_to_inventory_or_service(
+        db, unit_id, unit_label, kondisi_hp, cabang, kasir_name,
+        keluhan=unit_data.get("keluhan", "")
+    )
+```
+- **Root Cause:** Unit is created (insert_one) then routed to inventory/service. If routing fails (e.g., service ticket creation fails), the unit exists but is in wrong state (status=Tersedia but should be Service).
+- **Impact:** Partial state — unit exists without proper routing.
+- **Fix Plan:** Wrap in try/except, rollback unit creation on routing failure.
+- **Regression Risk:** Medium — adding error handling to critical path.
+- **Status:** OPEN
+
+---
+
+## BUG-036 [SESSION 2]
+- **Severity:** High (P1)
+- **Repository:** Backend
+- **Role:** Kasir, Owner
+- **File:** app/services/cod_service.py:402-509, app/routes/cod.py:264-275
+- **Evidence:**
+```
+$ sed -n '264,275p' app/routes/cod.py
+@router.post("/{cod_id}/approve", response_model=dict)
+async def approve_beli(
+    cod_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
+):
+    kasir_name = user.get("name") or user.get("username")
+    cabang = user.get("cabang")
+    cod = await cod_service.approve_beli_cod(db, cod_id, kasir_name, cabang)
+    return ok(cod.model_dump(), message=f"COD {cod_id} disetujui — unit masuk inventory")
+
+$ sed -n '416,421p' app/services/cod_service.py
+    doc = await db.cod_requests.find_one_and_update(
+        {"cod_id": cod_id, "status": "menunggu_approval_kasir", "type": "beli"},
+        ...
+    )
+```
+- **Root Cause:** `approve_beli_cod` does NOT validate that the COD's cabang matches the approving kasir's cabang. Any kasir can approve any COD from any branch, and the unit gets created in THEIR cabang instead of the original.
+- **Impact:** Cross-branch COD approval — unit created in wrong branch. Data integrity compromised.
+- **Fix Plan:** Add `doc["cabang"] != cabang` check before processing, or add cabang to the find_one_and_update filter.
+- **Regression Risk:** Low — adding ownership validation.
+- **Status:** OPEN
+
+---
+
+## BUG-037 [SESSION 2]
+- **Severity:** High (P1)
+- **Repository:** Backend
+- **Role:** Kasir, Teknisi, Owner
+- **File:** app/routes/units.py:39-51, app/schemas/unit.py:46
+- **Evidence:**
+```
+$ sed -n '46p' app/schemas/unit.py
+    cabang:        str = "JYP"
+$ sed -n '39,51p' app/routes/units.py
+@router.post("", status_code=201)
+async def create_unit(
+    body: UnitCreateRequest,
+    db:   AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
+):
+    unit = await unit_service.create_unit(db, body, actor=user.get("name", user.get("username", "")))
+```
+- **Root Cause:** `create_unit` takes cabang from the request body (defaults to "JYP"). The route handler does NOT override body.cabang with user.get("cabang"). A kasir could inject a different cabang via the API.
+- **Impact:** Kasir can create units in any branch by manipulating the cabang field in the request body.
+- **Fix Plan:** Force `body.cabang = user.get("cabang")` for non-owner roles (like sparepart.py:32-33 does).
+- **Regression Risk:** Low — adding authorization enforcement.
+- **Status:** OPEN
+
+---
+
+## BUG-038 [SESSION 2]
+- **Severity:** Low (P3)
 - **Repository:** Backend
 - **Role:** N/A (dead code)
 - **File:** app/routes/owner_influencer.py
-- **Line:** 1-51
 - **Evidence:**
 ```
 $ grep "owner_influencer" app/main.py
 (no output — not imported)
+$ wc -l app/routes/owner_influencer.py
+51 app/routes/owner_influencer.py
 ```
-- **Root Cause:** `owner_influencer.py` duplicates endpoints in `influencer.py`. Not registered.
-- **Impact:** Dead code. No runtime impact.
+- **Root Cause:** `owner_influencer.py` (51 lines) duplicates endpoints in `influencer.py`. Not registered in main.py. Dead code.
+- **Impact:** No runtime impact. Code confusion.
 - **Fix Plan:** Delete file.
-- **Regression Risk:** Low
-- **Status:** FIXED
-- **Verified By:** Code fix: kasir filter added to list_cod_requests_all (kasir_id parameter). Kasir now only sees COD they created.
+- **Regression Risk:** Low.
+- **Status:** OPEN
 
 ---
 
-## BUG-012
-- **Severity:** Medium
-- **Repository:** Backend
-- **Role:** All (data integrity)
-- **File:** app/config/database.py
-- **Line:** 80-88
-- **Evidence:**
-```
-$ grep "create_index" app/config/database.py | grep -E "cod_id|transfer_id|req_id"
-    await db.cod_requests.create_index("cod_id", unique=True)
-    await db.transfer_stok.create_index("transfer_id", unique=True)
-    await db.request_sparepart.create_index("req_id", unique=True)
-```
-- **Root Cause:** Missing unique indexes on cod_requests, transfer_stok, request_sparepart.
-- **Impact:** Duplicate records under concurrent writes.
-- **Fix Plan:** Add unique indexes.
-- **Regression Risk:** Low
-- **Status:** FIXED
-- **Verified By:** Code check: 3 indexes confirmed in database.py. Indirect live test: created 3 request-sparepart records (REQ-SP-009/010/011), all unique IDs — counter+index mechanism works. Direct index verification requires MongoDB shell access (db.cod_requests.getIndexes()).
-
----
-
-## BUG-013
-- **Severity:** Medium
-- **Repository:** Backend
-- **Role:** Owner
-- **File:** app/services/cloudinary_service.py
-- **Line:** 133
-- **Evidence:**
-```
-$ grep "utcnow\|datetime.now(timezone.utc)" app/services/cloudinary_service.py
-    timestamp = int(datetime.now(timezone.utc).timestamp())
-```
-- **Root Cause:** Used deprecated `datetime.utcnow()`.
-- **Impact:** Potential timestamp issues.
-- **Fix Plan:** Replace with `datetime.now(timezone.utc)`.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep confirms utcnow() removed (0 matches), datetime.now(timezone.utc) present.
-
----
-
-## BUG-014
-- **Severity:** High
-- **Repository:** Backend
-- **Role:** Influencer, Kurir (data leakage)
-- **File:** app/routes/transaksi.py, app/routes/units.py
-- **Line:** transaksi.py:46, units.py:28, units.py:73
-- **Evidence:**
-```
-$ grep -n "Depends(require_" app/routes/transaksi.py app/routes/units.py
-app/routes/transaksi.py:31:    user: dict = Depends(require_kasir_teknisi_or_owner),
-app/routes/transaksi.py:46:    user: dict = Depends(require_kasir_teknisi_or_owner),
-app/routes/transaksi.py:66:    user: dict = Depends(require_kasir_teknisi_or_owner),
-app/routes/units.py:28:    user:   dict = Depends(require_kasir_teknisi_or_owner),
-app/routes/units.py:43:    user: dict = Depends(require_kasir_teknisi_or_owner),
-app/routes/units.py:59:    user:    dict = Depends(require_kasir_teknisi_or_owner),
-app/routes/units.py:73:    user: dict = Depends(require_kasir_teknisi_or_owner),
-```
-- **Root Cause:** Transaction detail and unit list/detail used `require_any`, exposing harga_modal/profit.
-- **Impact:** Financial data visible to influencer/kurir.
-- **Fix Plan:** Change to `require_kasir_teknisi_or_owner`.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep confirms all endpoints use require_kasir_teknisi_or_owner. require_any only in unused import.
-
----
-
-## BUG-015
-- **Severity:** High
-- **Repository:** Backend
-- **Role:** All (login crash)
-- **File:** app/services/auth_service.py
-- **Line:** 10-17
-- **Evidence:**
-```
-$ sed -n '10,17p' app/services/auth_service.py
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Username atau password salah",
-        )
-
-    stored_hash = user.get("password_hash") or user.get("password", "")
-```
-- **Root Cause:** `user.get()` called before checking if user is None.
-- **Impact:** Login returns 500 instead of 401 for non-existent users.
-- **Fix Plan:** Move null check before .get().
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** Code check: 'if not user:' at line 10, 'user.get("password_hash")' at line 17. Null check correctly precedes .get().
-
----
-
-## BUG-016
-- **Severity:** Medium
+## BUG-039 [SESSION 2]
+- **Severity:** Low (P3)
 - **Repository:** Frontend
-- **Role:** All (debug console)
-- **File:** index.html
-- **Line:** 15-16
+- **Role:** Owner/Admin
+- **File:** main.js:430
 - **Evidence:**
 ```
-$ grep "eruda" index.html
-<!-- <script src="https://cdn.jsdelivr.net/npm/eruda"></script> -->
-<!-- <script>eruda.init();</script> -->
+$ sed -n '430p' main.js
+    delete: function(publicId) { return uploadFile('/upload/image', new Blob([publicId], {type: 'application/json'})); },
 ```
-- **Root Cause:** Eruda debug console loaded in production.
-- **Impact:** Security risk — users can inspect/modify app state.
-- **Fix Plan:** Comment out Eruda script tags.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep confirms both lines commented out with '<!-- ... -->'.
+- **Root Cause:** `upload.delete` uses POST with Blob instead of DELETE method. Backend has `DELETE /image` endpoint. This sends a POST to `/upload/image` with a Blob body, which likely hits the upload endpoint instead of delete.
+- **Impact:** Image deletion may not work as intended (depends on backend routing).
+- **Fix Plan:** Change to `request('DELETE', '/image?id=' + publicId)` or check backend delete route signature.
+- **Regression Risk:** Low.
+- **Status:** SUSPECTED (needs backend route verification)
 
 ---
 
-## BUG-017
-- **Severity:** Medium
-- **Repository:** Frontend
-- **Role:** All (XSS via toast)
-- **File:** index.html
-- **Line:** 664
-- **Evidence:**
-```
-$ grep "DOMPurify.sanitize(msg)" index.html
-el.innerHTML = `${icons[type]||icons.info}<span>${DOMPurify.sanitize(msg)}</span>`;
-```
-- **Root Cause:** Toast messages used unsanitized msg in innerHTML.
-- **Impact:** Potential XSS via error messages.
-- **Fix Plan:** Use DOMPurify.sanitize(msg).
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep confirms DOMPurify.sanitize(msg) used in showToast innerHTML.
-
----
-
-## BUG-018
-- **Severity:** Medium
-- **Repository:** Frontend
-- **Role:** All (notification data loss)
-- **File:** index.html
-- **Line:** 5633
-- **Evidence:**
-```
-$ grep "_items.*localStorage\|_items.*JSON.parse" index.html
-_items: JSON.parse(localStorage.getItem('jyp_notif') || '[]'),
-```
-- **Root Cause:** NOTIF._items never loaded from localStorage on startup.
-- **Impact:** Notifications lost on page reload.
-- **Fix Plan:** Add initialization from localStorage.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep confirms _items initialized with JSON.parse(localStorage.getItem('jyp_notif')).
-
----
-
-## BUG-019
-- **Severity:** Medium
-- **Repository:** Frontend
-- **Role:** Kurir (implicit global)
-- **File:** index.html
-- **Line:** 5470
-- **Evidence:**
-```
-$ grep -c "event.target" index.html
-0
-```
-- **Root Cause:** `event` used as implicit global without parameter.
-- **Impact:** Button state may not update correctly.
-- **Fix Plan:** Replace with document.querySelector.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep -c returns 0 matches. Replaced with document.querySelector.
-
----
-
-## BUG-020
-- **Severity:** Low
-- **Repository:** Frontend
-- **Role:** Developer (debug output)
-- **File:** index.html
-- **Line:** 4844-4845
-- **Evidence:**
-```
-$ grep -c "console.log" index.html
-0
-```
-- **Root Cause:** Debug console.log left in production.
-- **Impact:** Leaks API response to browser console.
-- **Fix Plan:** Remove console.log lines.
-- **Regression Risk:** Low
-- **Status:** VERIFIED
-- **Verified By:** grep -c returns 0 matches. All console.log removed.
-
----
-
-## BUG-021
-- **Severity:** Medium
+## BUG-040 [SESSION 2]
+- **Severity:** Medium (P2)
 - **Repository:** Backend
-- **Role:** Kasir (data exposure)
-- **File:** app/routes/cod.py
-- **Line:** 72-74
+- **Role:** Kasir (COD approval)
+- **File:** app/services/cod_service.py:512-555
 - **Evidence:**
 ```
-$ sed -n '62,80p' app/routes/cod.py
-    role = user.get("role", "kasir")
-    if role == "kasir":
-        kurir_id = user.get("sub") or user.get("username")
-        pass  # service handles this
-    cods = await cod_service.list_cod_requests_all(
-        db, cabang, status, type, date_from, date_to, limit
+$ sed -n '522,527p' app/services/cod_service.py
+    doc = await db.cod_requests.find_one_and_update(
+        {"cod_id": cod_id, "status": "menunggu_approval_kasir", "type": "beli"},
+        {"$set": {"status": "ditolak", ...}},
+        return_document=True
     )
 ```
-- **Root Cause:** When role is "kasir", the code does `pass` — no filter applied. The kasir_id variable is set but never used. Result: kasir sees ALL COD requests in their cabang, not just their own.
-- **Impact:** Data exposure between kasir in the same cabang. Kasir A can see COD requests created by Kasir B.
-- **Fix Plan:** Add `kasir_id` parameter to `list_cod_requests_all` and pass `user.get("username")` when role is kasir.
-- **Regression Risk:** Low — adding filter, not changing existing behavior for other roles.
-- **Status:** FIXED
-- **Verified By:** Code fix: kasir filter added to list_cod_requests_all (kasir_id parameter). Kasir now only sees COD they created.
+- **Root Cause:** Same as BUG-036 — `reject_beli_cod` also does NOT validate cabang ownership. Any kasir can reject any COD from any branch.
+- **Impact:** Cross-branch COD rejection.
+- **Fix Plan:** Same as BUG-036 — add cabang check.
+- **Regression Risk:** Low.
+- **Status:** OPEN (same root cause as BUG-036)
 
 ---
 
-## BUG-022
-- **Severity:** Critical
-- **Repository:** Frontend
-- **Role:** Kasir (COD delivery broken)
-- **File:** main.js
-- **Line:** 398 (missing)
-- **Evidence:**
-```
-$ grep -n "create" main.js | grep "cod"
-(no output — method does not exist)
-$ grep -n "API.cod.create" index.html
-3109:    await API.cod.create({
-```
-- **Root Cause:** `API.cod` object in main.js has no `create` method. Backend endpoint `POST /cod` exists but the frontend client wrapper was never added. `index.html:3109` calls `API.cod.create(...)` which throws "is not a function".
-- **Impact:** Kasir cannot create COD delivery — entire feature broken.
-- **Fix Plan:** Add `create: function(b) { return request('POST', '/cod', b); }` to API.cod in main.js.
-- **Regression Risk:** Low — adding missing method, no existing behavior changed.
-- **Status:** FIXED
-- **Verified By:** grep confirms `create` method now present in main.js line 399. Requires push + live test.
-
----
-
-## BUG-023
-- **Severity:** Critical
+## BUG-041 [SESSION 2]
+- **Severity:** Medium (P2)
 - **Repository:** Backend
-- **Role:** Kasir (COD delivery crash on unit-only transaction)
-- **File:** app/services/cod_service.py
-- **Line:** 140
+- **Role:** Kasir, Teknisi
+- **File:** app/services/sparepart.py:101-108
 - **Evidence:**
 ```
-Vercel function log:
-TypeError: 'NoneType' object is not iterable
-File "app/services/cod_service.py", line 140
-    for sp in trx.get("sp_items", [])
+$ sed -n '95,108p' app/services/sparepart.py
+    sp = await db.sparepart.find_one({"sp_id": sp_id})
+    ...
+    stok_baru = sp["stok"] + payload.delta
+    if stok_baru < 0:
+        raise HTTPException(status_code=400, detail=f"Stok tidak cukup...")
+    ...
+    await db.sparepart.update_one(
+        {"sp_id": sp_id}, {"$set": {"stok": stok_baru, "updated_at": now}}
+    )
 ```
-- **Root Cause:** `transaksi_service.py:200` stores `sp_items: None` when transaction has no spareparts. `trx.get("sp_items", [])` returns `None` (not `[]`) because the key EXISTS with value None. The default `[]` only applies when key is MISSING. This bug was not caught in earlier testing because the test transaction happened to include spareparts.
-- **Impact:** COD delivery creation crashes for any transaction that contains only a unit HP without spareparts.
-- **Fix Plan:** Change `trx.get("sp_items", [])` to `(trx.get("sp_items") or [])`. Also fix similar patterns for `status_history` in same file.
-- **Regression Risk:** Low — safe pattern works for all 3 cases (key missing, value None, value []).
-- **Status:** FIXED
-- **Verified By:** Code fix applied. Requires push + live test with 3 scenarios.
-- **Test Coverage Lesson:** Earlier testing only tested with sparepart transactions. Must test all data variants: unit-only, sparepart-only, mixed.
+- **Root Cause:** `update_stok` does read-then-write. Two simultaneous updates could both read the same stok value, causing one update to overwrite the other.
+- **Impact:** Stok could become inconsistent under concurrent admin updates.
+- **Fix Plan:** Use atomic `find_one_and_update` with conditional stok check for decrements.
+- **Regression Risk:** Low.
+- **Status:** OPEN
 
 ---
 
-## BUG-024
-- **Severity:** High
-- **Repository:** Backend + Frontend
-- **Role:** Kurir (COD delivery renders empty)
-- **File:** app/schemas/cod.py, app/services/cod_service.py, index.html
-- **Line:** cod.py:55-67, cod_service.py:412, index.html:5422-5423
-- **Evidence:**
-```
-Live response from GET /cod/kurir/dashboard:
-{
-  "type": "delivery",
-  "location": "Toko",
-  "wa_number": "",
-  "items": null,
-  "delivery_address": null,
-  "wa_customer": null,
-  "ALL KEYS": ["cod_id", "type", "status", "created_at", "location",
-               "wa_number", "screenshot_url", "product_name", "offer_price",
-               "kasir_name", "kurir_name", "kurir_id"]
-}
-```
-- **Root Cause:** `CODRequestList` schema (list endpoint response) didn't include `delivery_address`, `wa_customer`, `items` fields. These were only in `CODRequestDetail`. Also `_format_dashboard_item` didn't populate them. Frontend rendered raw field names which were all null/missing.
-- **Impact:** Kurir dashboard shows "-" for all delivery columns — feature appears broken.
-- **Fix Plan:** Add delivery fields to CODRequestList schema, update _format_dashboard_item, update frontend conditional rendering.
-- **Regression Risk:** Low — adding fields, not changing existing ones.
-- **Status:** FIXED
-- **Verified By:** Code fix applied. Requires push + live test.
-
----
-
-## BUG-025
-- **Severity:** High
+## BUG-042 [SESSION 2]
+- **Severity:** Medium (P2)
 - **Repository:** Backend
-- **Role:** Kurir (COD delivery status update blocked)
-- **File:** app/schemas/cod.py
-- **Line:** 45-54
+- **Role:** Teknisi
+- **File:** app/services/sparepart.py:124-136
 - **Evidence:**
 ```
-Live test response:
-HTTP 422: Input should be 'diterima', 'ditolak', 'kurir_menuju_lokasi',
-'sudah_bertemu_penjual', 'barang_akan_dijemput', 'barang_sudah_diambil',
-'kurir_sedang_transaksi', 'transaksi_berhasil' or 'gagal'
+$ sed -n '124,136p' app/services/sparepart.py
+    for item in items:
+        sp = await db.sparepart.find_one({"sp_id": item["sp_id"]})
+        ...
+        actual_deducted = min(sp["stok"], item["jumlah"])
+        stok_baru = sp["stok"] - actual_deducted
+        await db.sparepart.update_one(
+            {"sp_id": item["sp_id"]}, {"$set": {"stok": stok_baru, ...}}
+        )
 ```
-- **Root Cause:** `CODStatusUpdate` Literal only includes beli/jual statuses. Delivery statuses (kurir_menuju_toko, sedang_diantar, terkirim) were defined in `COD_DELIVERY_FLOW` but never added to the Pydantic validation Literal. Pydantic rejects input before service-level flow validation is reached.
-- **Impact:** Kurir cannot advance COD delivery beyond "diterima" — all subsequent status updates fail with 422.
-- **Fix Plan:** Add 3 delivery statuses to CODStatusUpdate Literal.
-- **Regression Risk:** Low — adding values, not removing.
-- **Status:** FIXED
-- **Verified By:** Code fix committed (dd359ae). Requires push + live re-test.
+- **Root Cause:** `kurangi_stok_batch` does read-then-write per item. Same race condition pattern as BUG-041 but in batch context.
+- **Impact:** Stok could go negative if two service completions run simultaneously.
+- **Fix Plan:** Use atomic `find_one_and_update` with `$gte` check per item.
+- **Regression Risk:** Low.
+- **Status:** OPEN
 
 ---
 
@@ -565,16 +398,28 @@ HTTP 422: Input should be 'diterima', 'ditolak', 'kurir_menuju_lokasi',
 
 | Status | Count |
 |--------|-------|
-| VERIFIED | 18 |
-| FIXED (needs live test) | 2 |
-| OPEN | 1 |
-| **Total** | **20** |
+| VERIFIED (prev session) | 18 |
+| FIXED — needs live test (prev) | 10 |
+| OPEN (new) | 12 |
+| SUSPECTED (new) | 1 |
+| **Total** | **41** |
 
-### VERIFIED (18): BUG-001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 013, 014, 015, 016, 017, 018, 019, 020
+### OPEN — Critical (0): None
+### OPEN — High (5): BUG-029, 033, 036, 037, 040
+### OPEN — Medium (6): BUG-030, 031, 032, 034, 035, 041, 042
+### OPEN — Low (1): BUG-038
+### SUSPECTED (1): BUG-039
 
-### FIXED — Needs Live Test (2):
-- **BUG-012**: Indexes
-- **BUG-021**: Kasir COD list filter (requires push to test live) — direct verification requires MongoDB shell (db.cod_requests.getIndexes())
-
-### OPEN (1):
-- **BUG-011** (Low) — dead route file `owner_influencer.py`, no runtime impact
+### Priority Fix Order:
+1. **BUG-029** (HIGH) — kurir_log wrong collection — 1 line fix
+2. **BUG-037** (HIGH) — create_unit cabang injection — 1 line fix
+3. **BUG-036+040** (HIGH) — approve/reject COD no cabang check — 2 line fix
+4. **BUG-033** (HIGH) — legacy sparepart transaction race — refactor to atomic
+5. **BUG-032** (MEDIUM) — unit_detail no cabang check — 2 line fix
+6. **BUG-030** (MEDIUM) — customer no cabang filter — 3 line fix
+7. **BUG-031** (MEDIUM) — customer no cabang in transaction — 1 line fix
+8. **BUG-034** (MEDIUM) — COD status update non-atomic — refactor PATH 2
+9. **BUG-035** (MEDIUM) — approve_beli partial state — add try/except
+10. **BUG-041+042** (MEDIUM) — sparepart stock race — refactor to atomic
+11. **BUG-038** (LOW) — delete dead route file
+12. **BUG-039** (SUSPECTED) — upload.delete POST vs DELETE

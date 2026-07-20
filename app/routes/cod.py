@@ -325,7 +325,7 @@ async def kurir_log(
     if action:
         query["aksi"] = {"$regex": action, "$options": "i"}
     
-    cursor = db.logs.find(query).sort("created_at", -1).limit(limit)
+    cursor = db.log.find(query).sort("created_at", -1).limit(limit)
     logs = await cursor.to_list(length=limit)
     
     return ok([

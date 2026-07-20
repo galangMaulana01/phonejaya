@@ -15,8 +15,10 @@ def _fmt(doc: dict) -> CustomerResponse:
     )
 
 
-async def list_customer(db, q: Optional[str]=None) -> List[CustomerResponse]:
+async def list_customer(db, q: Optional[str]=None, cabang: Optional[str]=None) -> List[CustomerResponse]:
     query: dict = {}
+    if cabang:
+        query["cabang"] = cabang
     if q: query["$or"] = [{"nama":{"$regex":q,"$options":"i"}},{"kontak":{"$regex":q,"$options":"i"}}]
     docs = await db.customers.find(query).sort("nama", 1).to_list(length=None)
     return [_fmt(d) for d in docs]

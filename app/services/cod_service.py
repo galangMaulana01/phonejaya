@@ -245,7 +245,7 @@ async def update_cod_status(
             return _format_cod_response(result)
         # If result is None, fall through to path 2 (might be manual-assign accept)
     
-    # ── PATH 2: Existing ownership check (unchanged) ──
+    # ── PATH 2: Flow-validated + atomic status update ──
     doc = await db.cod_requests.find_one({"cod_id": cod_id})
     if not doc:
         raise HTTPException(status_code=404, detail="COD Request tidak ditemukan")
@@ -264,23 +264,24 @@ async def update_cod_status(
             detail=f"Transisi status dari '{current}' ke '{new_status}' tidak diizinkan untuk tipe {doc['type']}"
         )
     
-    status_history = doc.get("status_history") or []
-    status_history.append({
-        "status": new_status,
-        "by": actor,
-        "by_name": actor_name,
-        "at": now,
-        "note": note
-    })
-    
-    await db.cod_requests.update_one(
-        {"cod_id": cod_id},
+    # Atomic update with status filter to prevent race
+    update_result = await db.cod_requests.find_one_and_update(
+        {"cod_id": cod_id, "status": current},
         {"$set": {
             "status": new_status,
-            "status_history": status_history,
             "updated_at": now
+        }, "$push": {
+            "status_history": {
+                "status": new_status,
+                "by": actor,
+                "by_name": actor_name,
+                "at": now,
+                "note": note
+            }
         }}
     )
+    if not update_result:
+        raise HTTPException(status_code=409, detail="Status sudah berubah, coba lagi")
     
     doc = await db.cod_requests.find_one({"cod_id": cod_id})
     
@@ -412,12 +413,13 @@ async def approve_beli_cod(
     """
     now = datetime.now(timezone.utc)
     
-    # Atomic: only succeeds if status is menunggu_approval_kasir
+    # Atomic: only succeeds if status is menunggu_approval_kasir AND same cabang
     doc = await db.cod_requests.find_one_and_update(
         {
             "cod_id": cod_id,
             "status": "menunggu_approval_kasir",
             "type": "beli",
+            "cabang": cabang,  # Validate cabang ownership
         },
         {
             "$set": {
@@ -524,6 +526,7 @@ async def reject_beli_cod(
             "cod_id": cod_id,
             "status": "menunggu_approval_kasir",
             "type": "beli",
+            "cabang": cabang,  # Validate cabang ownership
         },
         {
             "$set": {

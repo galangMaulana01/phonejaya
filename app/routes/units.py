@@ -42,6 +42,9 @@ async def create_unit(
     db:   AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
+    # Force cabang dari user, bukan dari body (prevent cabang injection)
+    if user.get("role") != "owner":
+        body.cabang = user.get("cabang", body.cabang)
     unit = await unit_service.create_unit(db, body, actor=user.get("name", user.get("username", "")))
     msg = (
         f"Unit {unit.unit_id} berhasil diposting → Stok Tersedia"
@@ -77,6 +80,10 @@ async def unit_detail(
     doc = await db.units.find_one({"unit_id": unit_id})
     if not doc:
         raise HTTPException(status_code=404, detail=f"Unit {unit_id} tidak ditemukan")
+    # Validate cabang ownership (owner bisa akses semua)
+    if user.get("role") != "owner" and doc.get("cabang") != user.get("cabang"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Unit bukan milik cabang Anda")
     unit = unit_service._fmt(doc)
     data = unit.model_dump()
     # Hide harga_modal from teknisi
