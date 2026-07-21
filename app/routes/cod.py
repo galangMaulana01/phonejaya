@@ -257,14 +257,16 @@ async def kurir_submit_beli(
 @router.post("/{cod_id}/approve", response_model=dict)
 async def approve_beli(
     cod_id: str,
+    body: dict = {},
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     """Kasir approve COD beli — unit masuk inventory/teknisi."""
     kasir_name = user.get("name") or user.get("username")
     cabang = user.get("cabang")
+    harga_jual = body.get("harga_jual", 0)
     
-    cod = await cod_service.approve_beli_cod(db, cod_id, kasir_name, cabang)
+    cod = await cod_service.approve_beli_cod(db, cod_id, kasir_name, cabang, harga_jual=harga_jual)
     return ok(cod.model_dump(), message=f"COD {cod_id} disetujui — unit masuk inventory")
 
 

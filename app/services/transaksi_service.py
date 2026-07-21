@@ -149,7 +149,8 @@ async def create_transaksi(
                 actor=kasir_name
             )
             customer_id = new_customer.id
-            customer_doc = {"_id": new_customer.id, "points": 0}
+            # Re-query to get raw document with ObjectId (create_customer returns string id)
+            customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
 
     # ── Points logic ──
     trx_id = await next_trx_id(db)

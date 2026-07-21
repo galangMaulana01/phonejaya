@@ -404,6 +404,7 @@ async def approve_beli_cod(
     cod_id: str,
     kasir_name: str,
     cabang: str,
+    harga_jual: int = 0,
 ) -> CODRequestResponse:
     """
     Kasir approve COD beli — atomic claim → validate → create unit → finalize.
@@ -478,8 +479,8 @@ async def approve_beli_cod(
         "keamanan": unit_data.get("keamanan", "Tidak Ada"),
         "speaker": unit_data.get("speaker", "Normal"),
         "lcd": unit_data.get("lcd", "Original"),
-        "harga_modal": 0,
-        "harga_jual": 0 if kondisi_hp == "Repair" else deal_price,
+        "harga_modal": deal_price,
+        "harga_jual": 0 if kondisi_hp == "Repair" else harga_jual,
         "kondisi": unit_data.get("kondisi", "Normal"),
         "kondisi_hp": kondisi_hp,
         "battery": unit_data.get("battery", 100),
