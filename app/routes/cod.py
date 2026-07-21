@@ -67,16 +67,9 @@ async def list_cod_requests(
 ):
     """List COD requests untuk Kasir/KC/Owner (filter by cabang)."""
     cabang = user.get("cabang")
-    role = user.get("role", "kasir")
-    
-    # Kasir hanya lihat COD yang dia buat sendiri
-    kasir_filter = None
-    if role == "kasir":
-        kasir_filter = user.get("username")
     
     cods = await cod_service.list_cod_requests_all(
-        db, cabang, status, type, date_from, date_to, limit,
-        kasir_id=kasir_filter
+        db, cabang, status, type, date_from, date_to, limit
     )
     return ok([c.model_dump() for c in cods])
 

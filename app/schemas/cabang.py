@@ -32,6 +32,7 @@ class AssignKepalaCabangRequest(BaseModel):
     username:  str    # username akun yang akan dijadikan kepala cabang
     nama:      str    # nama lengkap
     password:  str    # password login
+    foto_profil_url: Optional[str] = None  # foto profil Kepala Cabang
 
 
 class CabangResponse(BaseModel):

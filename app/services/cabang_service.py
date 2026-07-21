@@ -113,7 +113,7 @@ async def assign_kepala_cabang(
     # Buat akun kepala cabang baru
     # Buat akun kepala cabang baru - handle race condition dengan try/except DuplicateKeyError
     try:
-        await db.users.insert_one({
+        user_doc = {
             "name":       payload.nama,
             "username":   payload.username,
             "password_hash": hash_password(payload.password),
@@ -122,12 +122,15 @@ async def assign_kepala_cabang(
             "aktif":      True,
             "created_at": now,
             "created_by": actor,
-        })
+        }
+        if payload.foto_profil_url:
+            user_doc["foto_profil_url"] = payload.foto_profil_url
+        await db.users.insert_one(user_doc)
     except DuplicateKeyError:
         raise HTTPException(status_code=409, detail=f"Username '{payload.username}' baru saja digunakan (race condition)")
 
     # Simpan juga ke karyawan
-    await db.karyawan.insert_one({
+    karyawan_doc = {
         "nama":       payload.nama,
         "username":   payload.username,
         "jabatan":    "Kepala Cabang",
@@ -137,7 +140,10 @@ async def assign_kepala_cabang(
         "bergabung":  now.date().isoformat(),
         "created_at": now,
         "created_by": actor,
-    })
+    }
+    if payload.foto_profil_url:
+        karyawan_doc["foto_profil_url"] = payload.foto_profil_url
+    await db.karyawan.insert_one(karyawan_doc)
 
     # Update cabang doc
     await db.cabang.update_one(

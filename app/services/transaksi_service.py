@@ -135,7 +135,8 @@ async def create_transaksi(
     customer_id = None
     customer_doc = None
     if payload.customer_nama and payload.customer_nama.strip():
-        customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip()})
+        # Per-cabang: lookup by nama + cabang (same customer name in different branches = different customers)
+        customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
         if customer_doc:
             customer_id = str(customer_doc["_id"])
         else:

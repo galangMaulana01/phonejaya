@@ -86,4 +86,7 @@ async def init_db() -> None:
     # Request sparepart - unique req_id
     await db.request_sparepart.create_index("req_id", unique=True)
     
+    # Customers - unique nama per cabang (per-cabang customer policy)
+    await db.customers.create_index([("nama", 1), ("cabang", 1)], unique=True)
+    
     logger.info("Database indexes created/verified")
