@@ -134,3 +134,8 @@ class CODRequestResponse(BaseModel):
     type: str
     status: str
     created_at: str
+
+
+class ApproveBeliRequest(BaseModel):
+    """Request kasir approve COD beli."""
+    harga_jual: int = 0

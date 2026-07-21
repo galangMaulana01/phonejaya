@@ -674,6 +674,10 @@ def _format_dashboard_item(doc: dict) -> CODRequestList:
         delivery_address=doc.get("delivery_address"),
         wa_customer=doc.get("wa_customer"),
         items=doc.get("items"),
+        # Beli-specific
+        unit_data=doc.get("unit_data"),
+        deal_price=doc.get("deal_price"),
+        reject_reason=doc.get("reject_reason"),
     )
 
 

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from app.config.database import get_db
 from app.schemas.cod import (
     CODRequestCreate, CODStatusUpdate, CODRequestResponse,
-    CODRequestList, CODRequestDetail, KurirListItem
+    CODRequestList, CODRequestDetail, KurirListItem, ApproveBeliRequest
 )
 from app.schemas.common import ok
 from app.services import cod_service
@@ -257,14 +257,14 @@ async def kurir_submit_beli(
 @router.post("/{cod_id}/approve", response_model=dict)
 async def approve_beli(
     cod_id: str,
-    body: dict = {},
+    body: ApproveBeliRequest,
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     """Kasir approve COD beli — unit masuk inventory/teknisi."""
     kasir_name = user.get("name") or user.get("username")
     cabang = user.get("cabang")
-    harga_jual = body.get("harga_jual", 0)
+    harga_jual = body.harga_jual
     
     cod = await cod_service.approve_beli_cod(db, cod_id, kasir_name, cabang, harga_jual=harga_jual)
     return ok(cod.model_dump(), message=f"COD {cod_id} disetujui — unit masuk inventory")
