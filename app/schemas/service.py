@@ -42,6 +42,7 @@ class ServiceUpdateRequest(BaseModel):
     estimasi_selesai:  Optional[str] = None
     foto_before_urls:  Optional[List[str]] = None
     foto_after_urls:   Optional[List[str]] = None
+    link_shopee:       Optional[str] = None  # Shopee product link for reference
 
 
 class ServiceResponse(BaseModel):

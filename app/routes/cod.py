@@ -137,6 +137,25 @@ async def kurir_reject(
     return ok(cod.model_dump(), message=f"COD {cod_id} ditolak")
 
 
+@router.post("/kurir/{cod_id}/reject-beli", response_model=dict)
+async def kurir_reject_beli(
+    cod_id: str,
+    payload: dict,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_kurir),
+):
+    """Kurir tolak COD beli setelah bertemu penjual (status sudah_bertemu_penjual)."""
+    kurir_id = user.get("sub") or user.get("username")
+    kurir_name = user.get("name") or user.get("username")
+    reason = payload.get("reason", "")
+    
+    if not reason:
+        raise HTTPException(status_code=400, detail="Alasan reject wajib diisi")
+    
+    cod = await cod_service.reject_beli_by_kurir(db, cod_id, kurir_id, kurir_name, reason)
+    return ok(cod.model_dump(), message=f"COD {cod_id} ditolak oleh kurir")
+
+
 @router.post("/kurir/{cod_id}/status", response_model=dict)
 async def kurir_update_status(
     cod_id: str,
@@ -266,7 +285,7 @@ async def approve_beli(
     cabang = user.get("cabang")
     harga_jual = body.harga_jual
     
-    cod = await cod_service.approve_beli_cod(db, cod_id, kasir_name, cabang, harga_jual=harga_jual)
+    cod = await cod_service.approve_beli_cod(db, cod_id, kasir_name, cabang, harga_jual=harga_jual, unit_data=body.unit_data, garansi_toko=body.garansi_toko, catatan=body.catatan)
     return ok(cod.model_dump(), message=f"COD {cod_id} disetujui — unit masuk inventory")
 
 

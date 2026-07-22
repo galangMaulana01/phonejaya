@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 
@@ -162,6 +162,9 @@ async def create_cod_request(
         "offer_price": offer_price,
         "note": payload.note,
         "location": payload.location,
+        "location_address": payload.location_address,
+        "location_lat": payload.location_lat,
+        "location_lng": payload.location_lng,
         "wa_number": payload.wa_number,
         "trx_id": trx_id_val,
         "delivery_address": delivery_address,
@@ -405,6 +408,9 @@ async def approve_beli_cod(
     kasir_name: str,
     cabang: str,
     harga_jual: int = 0,
+    unit_data: Dict[str, Any] = None,
+    garansi_toko: int = 7,
+    catatan: str = "",
 ) -> CODRequestResponse:
     """
     Kasir approve COD beli — atomic claim → validate → create unit → finalize.
@@ -450,8 +456,9 @@ async def approve_beli_cod(
         await write_log(db, kasir_name, "Gagal Approve COD Beli", f"{cod_id}: {reason}", cabang)
 
     # ══ Step 2: Validate unit_data ══
-    unit_data = doc.get("unit_data", {})
-    if not unit_data:
+    # Use unit_data from request if provided (kasir edited), otherwise fallback to COD doc
+    final_unit_data = unit_data or doc.get("unit_data", {})
+    if not final_unit_data:
         await _revert("Data unit tidak ditemukan di COD")
         raise HTTPException(status_code=400, detail="Data unit tidak ditemukan di COD")
 
@@ -459,44 +466,44 @@ async def approve_beli_cod(
     from app.utils.id_generator import next_unit_id
     from app.services.unit_service import route_unit_to_inventory_or_service
 
-    kat_kode = unit_data.get("kat_kode", "AI")
-    kondisi_kode = unit_data.get("kondisi_kode", "BN")
+    kat_kode = final_unit_data.get("kat_kode", "AI")
+    kondisi_kode = final_unit_data.get("kondisi_kode", "BN")
     unit_id = await next_unit_id(db, kat_kode, kondisi_kode, cabang)
 
-    kondisi_hp = unit_data.get("kondisi_hp", "Mulus")
+    kondisi_hp = final_unit_data.get("kondisi_hp", "Mulus")
     deal_price = doc.get("deal_price", 0)
 
     unit_doc = {
         "unit_id": unit_id,
-        "merk": unit_data.get("merk", ""),
-        "tipe": unit_data.get("tipe", ""),
-        "storage": unit_data.get("storage", "-"),
-        "ram": unit_data.get("ram", "-"),
-        "warna": unit_data.get("warna", "-"),
-        "imei": unit_data.get("imei", "-"),
-        "imei2": unit_data.get("imei2", "-"),
-        "tipe_sim": unit_data.get("tipe_sim", "Single SIM"),
-        "keamanan": unit_data.get("keamanan", "Tidak Ada"),
-        "speaker": unit_data.get("speaker", "Normal"),
-        "lcd": unit_data.get("lcd", "Original"),
+        "merk": final_unit_data.get("merk", ""),
+        "tipe": final_unit_data.get("tipe", ""),
+        "storage": final_unit_data.get("storage", "-"),
+        "ram": final_unit_data.get("ram", "-"),
+        "warna": final_unit_data.get("warna", "-"),
+        "imei": final_unit_data.get("imei", "-"),
+        "imei2": final_unit_data.get("imei2", "-"),
+        "tipe_sim": final_unit_data.get("tipe_sim", "Single SIM"),
+        "keamanan": final_unit_data.get("keamanan", "Tidak Ada"),
+        "speaker": final_unit_data.get("speaker", "Normal"),
+        "lcd": final_unit_data.get("lcd", "Original"),
         "harga_modal": deal_price,
         "harga_jual": 0 if kondisi_hp == "Repair" else harga_jual,
-        "kondisi": unit_data.get("kondisi", "Normal"),
+        "kondisi": final_unit_data.get("kondisi", "Normal"),
         "kondisi_hp": kondisi_hp,
-        "battery": unit_data.get("battery", 100),
-        "battery_health": unit_data.get("battery_health", 0),
+        "battery": final_unit_data.get("battery", 100),
+        "battery_health": final_unit_data.get("battery_health", 0),
         "status": "Service" if kondisi_hp == "Repair" else "Tersedia",
-        "kategori": unit_data.get("kategori", "Android"),
-        "catatan": f"COD Beli {doc['cod_id']}",
+        "kategori": final_unit_data.get("kategori", "Android"),
+        "catatan": catatan or f"COD Beli {doc['cod_id']}",
         "cabang": cabang,
         "locked": True,
-        "garansi_toko": 7,
+        "garansi_toko": garansi_toko,
         "created_at": now,
         "created_by": kasir_name,
         "tgl_terjual": None,
         "service_id": None,
-        "foto_url": unit_data.get("foto_url"),
-        "input_by_role": "Kurir (COD Beli)",
+        "foto_url": final_unit_data.get("foto_url"),
+        "input_by_role": "Kurir (COD Beli) → Approved by Kasir",
     }
 
     try:
@@ -510,7 +517,7 @@ async def approve_beli_cod(
         unit_label = f"{unit_doc['merk']} {unit_doc['tipe']} {unit_doc['storage']}"
         await route_unit_to_inventory_or_service(
             db, unit_id, unit_label, kondisi_hp, cabang, kasir_name,
-            keluhan=unit_data.get("keluhan", "")
+            keluhan=final_unit_data.get("keluhan", "")
         )
     except Exception as e:
         await _revert(f"Gagal routing unit: {str(e)}")
@@ -545,9 +552,7 @@ async def approve_beli_cod(
         cabang
     )
 
-    # Fetch updated doc for response
-    updated_doc = await db.cod_requests.find_one({"cod_id": cod_id})
-    return _format_cod_response(updated_doc)
+    return _format_cod_response(await db.cod_requests.find_one({"cod_id": cod_id}))
 
 
 async def reject_beli_cod(
@@ -594,6 +599,54 @@ async def reject_beli_cod(
         cabang
     )
     
+    return _format_cod_response(doc)
+
+
+async def reject_beli_by_kurir(
+    db: AsyncIOMotorDatabase,
+    cod_id: str,
+    kurir_id: str,
+    kurir_name: str,
+    reason: str,
+) -> CODRequestResponse:
+    """Kurir reject COD beli setelah bertemu penjual (status sudah_bertemu_penjual)."""
+    now = datetime.now(timezone.utc)
+
+    doc = await db.cod_requests.find_one_and_update(
+        {
+            "cod_id": cod_id,
+            "status": "sudah_bertemu_penjual",
+            "type": "beli",
+            "kurir_id": kurir_id,
+        },
+        {
+            "$set": {
+                "status": "ditolak",
+                "reject_reason": reason,
+                "updated_at": now,
+            },
+            "$push": {
+                "status_history": {
+                    "status": "ditolak",
+                    "by": kurir_id,
+                    "by_name": kurir_name,
+                    "at": now,
+                    "note": f"Ditolak kurir: {reason}"
+                }
+            }
+        },
+        return_document=True
+    )
+
+    if not doc:
+        raise HTTPException(status_code=409, detail="COD tidak bisa ditolak — status atau kurir tidak sesuai")
+
+    await write_log(
+        db, kurir_name, "Reject COD Beli (Kurir)",
+        f"{cod_id} → Ditolak kurir: {reason}",
+        doc.get("cabang", "")
+    )
+
     return _format_cod_response(doc)
 
 

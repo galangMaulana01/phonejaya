@@ -14,6 +14,11 @@ class CODRequestCreate(BaseModel):
     note: Optional[str] = None
     kurir_id: Optional[str] = None  # Required for beli/jual, optional for delivery (broadcast)
     
+    # Location fields (for beli/jual)
+    location_address: Optional[str] = None  # Alamat lengkap: jalan, RT/RW, kelurahan, kecamatan, kota
+    location_lat: Optional[float] = None    # Latitude dari map picker
+    location_lng: Optional[float] = None    # Longitude dari map picker
+    
     # Type = beli fields
     product_name: Optional[str] = None
     offer_price: Optional[int] = None
@@ -137,5 +142,18 @@ class CODRequestResponse(BaseModel):
 
 
 class ApproveBeliRequest(BaseModel):
-    """Request kasir approve COD beli."""
+    """Request kasir approve COD beli - full unit data edit."""
     harga_jual: int = 0
+    unit_data: Dict[str, Any]
+    garansi_toko: int = 7
+    catatan: str = ""
+
+    @field_validator("harga_jual")
+    @classmethod
+    def validate_harga_jual(cls, v, info):
+        # Only required if kondisi_hp != 'Repair'
+        unit_data = info.data.get("unit_data", {})
+        kondisi_hp = unit_data.get("kondisi_hp", "Mulus")
+        if kondisi_hp != "Repair" and v <= 0:
+            raise ValueError("Harga jual wajib diisi untuk kondisi Mulus")
+        return v

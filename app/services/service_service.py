@@ -156,6 +156,9 @@ async def update_service(
         # Auto-assign teknisi yang pertama ambil
         updates["teknisi"] = actor
 
+    if payload.link_shopee is not None:
+        updates["link_shopee"] = payload.link_shopee
+
     await db.service.update_one({"service_id": service_id}, {"$set": updates})
     updated = await db.service.find_one({"service_id": service_id})
 
