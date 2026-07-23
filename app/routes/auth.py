@@ -77,11 +77,17 @@ async def update_profile(
         from fastapi import HTTPException, status
         raise HTTPException(status_code=404, detail="User tidak ditemukan")
 
-    # Sync name to karyawan collection if exists
+    # Sync name and foto_profil_url to karyawan collection if exists
+    sync_data = {}
     if "name" in update_data:
+        sync_data["nama"] = update_data["name"]
+    if "foto_profil_url" in update_data:
+        sync_data["foto_profil_url"] = update_data["foto_profil_url"]
+    
+    if sync_data:
         await db.karyawan.update_one(
             {"username": current_user.get("username")},
-            {"$set": {"nama": update_data["name"]}}
+            {"$set": sync_data}
         )
 
     # Refresh user data
