@@ -27,3 +27,30 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserPublic
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Request untuk update profil sendiri - foto_profil_url dan nama yang bisa diubah."""
+    foto_profil_url: Optional[str] = None
+    name: Optional[str] = None
+
+
+class PasswordChangeRequest(BaseModel):
+    """Request ganti password - wajib verifikasi password lama."""
+    password_lama: str
+    password_baru: str
+    password_konfirmasi: str
+
+    @field_validator("password_baru")
+    @classmethod
+    def password_min_length(cls, v: str) -> str:
+        if len(v) < 6:
+            raise ValueError("Password minimal 6 karakter")
+        return v
+
+    @field_validator("password_konfirmasi")
+    @classmethod
+    def passwords_match(cls, v: str, info) -> str:
+        if v != info.data.get("password_baru"):
+            raise ValueError("Konfirmasi password tidak cocok")
+        return v
