@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
@@ -53,7 +53,9 @@ async def list_service(
         if date_from:
             wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
         if date_to:
-            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
+            # Make date_to inclusive by adding 1 day
+            dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+            wf["$lt"] = dt
         query["created_at"] = wf
     docs = await db.service.find(query).sort("created_at", -1).limit(limit).to_list(length=limit)
     return [_fmt(d) for d in docs]

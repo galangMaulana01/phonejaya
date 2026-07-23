@@ -346,12 +346,14 @@ async def list_cod_requests_all(
     if type_filter:
         query["type"] = type_filter
     if date_from or date_to:
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
         wf = {}
         if date_from:
             wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
         if date_to:
-            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
+            # Make date_to inclusive by adding 1 day
+            dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+            wf["$lt"] = dt
         query["created_at"] = wf
     
     cursor = db.cod_requests.find(query).sort("created_at", -1).limit(limit)
@@ -750,12 +752,14 @@ async def get_kurir_monitoring(
     
     # Date filter
     if date_from or date_to:
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
         wf = {}
         if date_from:
             wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
         if date_to:
-            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
+            # Make date_to inclusive by adding 1 day
+            dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+            wf["$lt"] = dt
         query["created_at"] = wf
     
     # Aggregate by kurir

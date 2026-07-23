@@ -37,10 +37,14 @@ async def list_log(
         query["user"] = role_filter
 
     if date_from or date_to:
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
         wf: dict = {}
-        if date_from: wf["$gte"] = datetime.fromisoformat(date_from.replace("Z","")).replace(tzinfo=timezone.utc)
-        if date_to:   wf["$lte"] = datetime.fromisoformat(date_to.replace("Z","")).replace(tzinfo=timezone.utc)
+        if date_from: 
+            wf["$gte"] = datetime.fromisoformat(date_from.replace("Z","")).replace(tzinfo=timezone.utc)
+        if date_to:   
+            # Make date_to inclusive by adding 1 day (end of day)
+            dt = datetime.fromisoformat(date_to.replace("Z","")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+            wf["$lt"] = dt
         query["waktu"] = wf
     cursor = db.log.find(query).sort("waktu", -1).limit(limit)
     docs   = await cursor.to_list(length=limit)
