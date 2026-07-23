@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from bson import ObjectId
 from app.config.database import get_db
 from app.schemas.auth import LoginRequest, TokenResponse, ProfileUpdateRequest, PasswordChangeRequest
 from app.schemas.common import ok
@@ -60,8 +61,15 @@ async def update_profile(
     if not update_data:
         return ok({"message": "Tidak ada data yang diupdate"})
 
+    # Convert string ID to ObjectId for MongoDB query
+    try:
+        obj_id = ObjectId(user_id)
+    except Exception:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=400, detail="User ID format tidak valid")
+
     result = await db.users.update_one(
-        {"_id": user_id},
+        {"_id": obj_id},
         {"$set": update_data}
     )
 
@@ -77,7 +85,7 @@ async def update_profile(
         )
 
     # Refresh user data
-    updated_user = await db.users.find_one({"_id": user_id})
+    updated_user = await db.users.find_one({"_id": obj_id})
     return ok({
         "id": str(updated_user["_id"]),
         "username": updated_user.get("username", ""),
@@ -101,8 +109,15 @@ async def change_password(
         from fastapi import HTTPException, status
         raise HTTPException(status_code=400, detail="User ID tidak valid")
 
+    # Convert string ID to ObjectId for MongoDB query
+    try:
+        obj_id = ObjectId(user_id)
+    except Exception:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=400, detail="User ID format tidak valid")
+
     # Get current user with password hash
-    user = await db.users.find_one({"_id": user_id})
+    user = await db.users.find_one({"_id": obj_id})
     if not user:
         from fastapi import HTTPException, status
         raise HTTPException(status_code=404, detail="User tidak ditemukan")
@@ -118,7 +133,7 @@ async def change_password(
 
     # Update password
     await db.users.update_one(
-        {"_id": user_id},
+        {"_id": obj_id},
         {"$set": {"password_hash": new_hash}}
     )
 
