@@ -144,6 +144,7 @@ async def approve_request(
                 dimensi_p=None,
                 dimensi_l=None,
                 dimensi_t=None,
+                product_link=doc.get("product_link"),
                 catatan=f"Auto-created from request {req_id}",
             ), actor=actor)
     elif payload.status == "Ditolak":
