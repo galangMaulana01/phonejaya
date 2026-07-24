@@ -260,6 +260,10 @@ async def update_cod_status(
     current = doc["status"]
     flow = ALL_FLOWS[doc["type"]]
     
+    # Idempotency: if same status, return current doc without error
+    if new_status == current:
+        return _format_cod_response(doc)
+    
     if new_status not in flow.get(current, []):
         raise HTTPException(
             status_code=400, 
