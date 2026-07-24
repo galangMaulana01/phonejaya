@@ -9,6 +9,11 @@ class StatusRequestEnum(str, Enum):
     selesai        = "Selesai"
     ditolak        = "Ditolak"
 
+# Enum for KC response input (they send Diterima/Ditolak)
+class KCResponseStatusEnum(str, Enum):
+    diterima = "Diterima"
+    ditolak  = "Ditolak"
+
 
 class RequestSparepartCreateRequest(BaseModel):
     tipe:       str
@@ -26,7 +31,7 @@ class RequestSparepartCreateRequest(BaseModel):
 
 
 class RequestSparepartResponseRequest(BaseModel):
-    status:         StatusRequestEnum
+    status:         KCResponseStatusEnum
     estimasi_tiba:  Optional[str] = None
     catatan:        str = ""
 
