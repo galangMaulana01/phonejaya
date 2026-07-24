@@ -136,6 +136,7 @@ async def approve_request(
             stok=doc["jumlah"],
             cabang=doc["cabang"],
             harga_jual=payload.harga_jual,
+            harga_beli=0,  # Default, can be updated later
         ), actor=actor)
     elif payload.status == "Ditolak":
         update["status"] = "Ditolak"
