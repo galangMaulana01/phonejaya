@@ -1,12 +1,13 @@
 from pydantic import BaseModel, field_validator
-from typing import Optional
+from typing import Optional, Literal
 from enum import Enum
 
 
 class StatusRequestEnum(str, Enum):
-    pending  = "Pending"
-    diterima = "Diterima"
-    ditolak  = "Ditolak"
+    pending        = "Pending"
+    menunggu_kasir = "Menunggu_Kasir"
+    selesai        = "Selesai"
+    ditolak        = "Ditolak"
 
 
 class RequestSparepartCreateRequest(BaseModel):
@@ -30,18 +31,37 @@ class RequestSparepartResponseRequest(BaseModel):
     catatan:        str = ""
 
 
+class RequestSparepartApproveRequest(BaseModel):
+    """Kasir approval akhir - set harga jual dan approve/reject."""
+    harga_jual: int
+    status:     Literal["Selesai", "Ditolak"]
+    catatan:    str = ""
+
+    @field_validator("harga_jual")
+    @classmethod
+    def harga_jual_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Harga jual harus lebih dari 0")
+        return v
+
+
 class RequestSparepartResponse(BaseModel):
-    id:             str
-    req_id:         str
-    tipe:           str
-    sp_id:          Optional[str] = None
-    nama_sp:        str
-    jumlah:         int
-    keterangan:     str
-    status:         str
-    estimasi_tiba:  Optional[str] = None
-    catatan_kc:     str = ""
-    cabang:         str
-    dibuat_oleh:    str
-    created_at:     str
-    updated_at:     Optional[str] = None
+    id:               str
+    req_id:           str
+    tipe:             str
+    sp_id:            Optional[str] = None
+    nama_sp:          str
+    jumlah:           int
+    keterangan:       str
+    status:           str
+    estimasi_tiba:    Optional[str] = None
+    catatan_kc:       str = ""
+    harga_jual:       Optional[int] = None
+    cabang:           str
+    dibuat_oleh:      str
+    disetujui_oleh_kc: Optional[str] = None
+    disetujui_at_kc:   Optional[str] = None
+    approved_by:      Optional[str] = None
+    approved_at:      Optional[str] = None
+    created_at:       str
+    updated_at:       Optional[str] = None
