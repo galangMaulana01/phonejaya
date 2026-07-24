@@ -21,6 +21,7 @@ def _fmt(doc: dict) -> RequestSparepartResponse:
         keterangan=doc.get("keterangan",""), status=doc.get("status","Pending"),
         estimasi_tiba=doc.get("estimasi_tiba"), catatan_kc=doc.get("catatan_kc",""),
         harga_jual=doc.get("harga_jual"),
+        product_link=doc.get("product_link"),
         cabang=doc.get("cabang",""), dibuat_oleh=doc.get("dibuat_oleh",""),
         disetujui_oleh_kc=doc.get("disetujui_oleh_kc"),
         disetujui_at_kc=fmt_waktu(doc["disetujui_at_kc"]) if doc.get("disetujui_at_kc") else None,
