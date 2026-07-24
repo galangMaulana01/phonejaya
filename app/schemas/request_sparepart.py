@@ -22,6 +22,7 @@ class RequestSparepartCreateRequest(BaseModel):
     jumlah:     int = 1
     keterangan: str = ""
     cabang:     str = "JYP"
+    product_link: Optional[str] = None
 
     @field_validator("nama_sp")
     @classmethod
@@ -62,6 +63,7 @@ class RequestSparepartResponse(BaseModel):
     estimasi_tiba:    Optional[str] = None
     catatan_kc:       str = ""
     harga_jual:       Optional[int] = None
+    product_link:     Optional[str] = None
     cabang:           str
     dibuat_oleh:      str
     disetujui_oleh_kc: Optional[str] = None

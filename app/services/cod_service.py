@@ -343,7 +343,9 @@ async def list_cod_requests_all(
     query = {}
     if cabang:
         query["cabang"] = cabang
-    if kasir_id:
+    # Only apply kasir_id filter if NOT filtering for menunggu_approval_kasir
+    # Kasir needs to see ALL pending approvals in their cabang
+    if kasir_id and status != "menunggu_approval_kasir":
         query["kasir_id"] = kasir_id
     if status:
         query["status"] = status

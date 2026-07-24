@@ -55,6 +55,7 @@ async def create_request(db, payload: RequestSparepartCreateRequest, actor: str)
         "keterangan": payload.keterangan, "status": "Pending",
         "estimasi_tiba": None, "catatan_kc": "",
         "harga_jual": None,
+        "product_link": payload.product_link,
         "cabang": payload.cabang, "dibuat_oleh": actor,
         "disetujui_oleh_kc": None, "disetujui_at_kc": None,
         "approved_by": None, "approved_at": None,
