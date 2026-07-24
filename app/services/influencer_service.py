@@ -277,12 +277,14 @@ async def list_videos(
     if platform:
         query["platform"] = platform
     if date_from or date_to:
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
         wf = {}
         if date_from:
             wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
         if date_to:
-            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
+            # Make date_to inclusive by adding 1 day
+            dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+            wf["$lt"] = dt
         query["uploaded_at"] = wf
 
     docs = await db.influencer_videos.find(query).sort("uploaded_at", -1).limit(limit).to_list(length=limit)
@@ -451,12 +453,14 @@ async def list_all_videos_owner(
     if platform:
         query["platform"] = platform
     if date_from or date_to:
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
         wf = {}
         if date_from:
             wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
         if date_to:
-            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
+            # Make date_to inclusive by adding 1 day
+            dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+            wf["$lt"] = dt
         query["uploaded_at"] = wf
 
     docs = await db.influencer_videos.find(query).sort("uploaded_at", -1).limit(limit).to_list(length=limit)
