@@ -8,7 +8,7 @@ from app.schemas.request_sparepart import (
 )
 from app.schemas.common import ok
 from app.services.request_sparepart_service import (
-    list_requests, create_request, respond_request, approve_request
+    list_requests, create_request, respond_request, approve_request as approve_request_service
 )
 from app.middlewares.auth import require_kasir_teknisi_or_owner, require_kepala_or_owner, require_kasir
 
@@ -69,7 +69,7 @@ async def approve_request(
     db:     AsyncIOMotorDatabase = Depends(get_db),
     user:   dict = Depends(require_kasir),
 ):
-    item = await approve_request(
+    item = await approve_request_service(
         db, req_id=req_id, payload=body,
         actor=user.get("name", user.get("username","")),
         actor_role=user.get("role",""),
