@@ -121,23 +121,29 @@ async def approve_request(
     }
 
     if payload.status == "Selesai":
-        if payload.harga_jual <= 0:
-            raise HTTPException(400, "Harga jual harus diisi untuk status Selesai")
-        update["status"] = "Selesai"
-        update["harga_jual"] = payload.harga_jual
-        update["approved_by"] = actor
-        update["approved_at"] = datetime.now(timezone.utc)
+            if payload.harga_jual <= 0:
+                raise HTTPException(400, "Harga jual harus diisi untuk status Selesai")
+            update["status"] = "Selesai"
+            update["harga_jual"] = payload.harga_jual
+            update["approved_by"] = actor
+            update["approved_at"] = datetime.now(timezone.utc)
 
-        # Create sparepart with harga_jual
-        from app.services.sparepart import create_sparepart
-        from app.schemas.sparepart import SparepartCreateRequest
-        await create_sparepart(db, SparepartCreateRequest(
-            nama=doc["nama_sp"],
-            stok=doc["jumlah"],
-            cabang=doc["cabang"],
-            harga_jual=payload.harga_jual,
-            harga_beli=0,  # Default, can be updated later
-        ), actor=actor)
+            # Create sparepart with harga_jual - provide all required fields
+            from app.services.sparepart import create_sparepart
+            from app.schemas.sparepart import SparepartCreateRequest
+            await create_sparepart(db, SparepartCreateRequest(
+                nama=doc["nama_sp"],
+                stok=doc["jumlah"],
+                cabang=doc["cabang"],
+                harga_jual=payload.harga_jual,
+                harga_beli=0,  # Default since we don't have it
+                kategori="Sparepart",
+                satuan="pcs",
+                dimensi_p=None,
+                dimensi_l=None,
+                dimensi_t=None,
+                catatan=f"Auto-created from request {req_id}",
+            ), actor=actor)
     elif payload.status == "Ditolak":
         update["status"] = "Ditolak"
 
