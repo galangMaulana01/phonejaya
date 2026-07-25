@@ -14,7 +14,7 @@ from app.routes import (
     service, customer, sparepart, cabang, request_sparepart,
     transfer_stok, influencer, upload, cod,
 )
-from app.config.database import init_db, get_db
+from app.config.database import init_db, get_db, get_client
 import logging
 
 logger = logging.getLogger(__name__)
@@ -28,10 +28,13 @@ logging.basicConfig(
 async def warmup_db():
     """Warm up MongoDB connection on startup to avoid cold start latency."""
     try:
-        db = await init_db()
+        # Initialize indexes
+        await init_db()
         # Test connection with a simple ping
-        await db.command("ping")
+        client = get_client()
+        await client.admin.command("ping")
         # Verify customers collection exists
+        db = client[settings.MONGO_DB]
         collections = await db.list_collection_names()
         logger.info("Database connection warmup successful. Collections: %s", collections)
         return True

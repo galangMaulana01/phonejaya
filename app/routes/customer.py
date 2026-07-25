@@ -24,6 +24,8 @@ async def create_customer(
 ):
     """Kasir membuat customer baru (status: Pending)."""
     cabang = user.get("cabang")
+    if not cabang:
+        raise HTTPException(status_code=400, detail="User tidak memiliki cabang")
     try:
         item = await customer_service.create_customer(
             db,
@@ -36,7 +38,7 @@ async def create_customer(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Failed to create customer")
+        logger.exception("Failed to create customer: %s", str(e))
         raise HTTPException(status_code=500, detail="Gagal membuat customer")
     return ok(item.model_dump(), message=f"Customer {item.nama} dibuat (Pending approval)")
 
