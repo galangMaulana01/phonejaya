@@ -12,6 +12,15 @@ from app.services.log_service import write_log
 
 
 def _fmt(doc: dict) -> CustomerResponse:
+    # Convert status_history timestamps to string format
+    status_history = doc.get("status_history", [])
+    formatted_history = []
+    for h in status_history:
+        h_copy = dict(h)
+        if "timestamp" in h_copy and isinstance(h_copy["timestamp"], datetime):
+            h_copy["timestamp"] = fmt_waktu(h_copy["timestamp"])
+        formatted_history.append(h_copy)
+
     return CustomerResponse(
         id=str(doc["_id"]),
         nama=doc["nama"],
@@ -25,7 +34,7 @@ def _fmt(doc: dict) -> CustomerResponse:
         rejected_at=fmt_waktu(doc.get("rejected_at")) if doc.get("rejected_at") else None,
         rejected_by=doc.get("rejected_by"),
         rejected_reason=doc.get("rejected_reason"),
-        status_history=doc.get("status_history", []),
+        status_history=formatted_history,
     )
 
 
