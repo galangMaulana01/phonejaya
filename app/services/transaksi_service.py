@@ -144,13 +144,16 @@ async def create_transaksi(
             customer_id = str(customer_doc["_id"])
         else:
             new_customer = await create_customer(db,
-                __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
-                    nama=payload.customer_nama.strip(),
-                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
-                    cabang=cabang
-                ),
-                actor=kasir_name
-            )
+                            __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
+                                nama=payload.customer_nama.strip(),
+                                kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
+                                cabang=cabang
+                            ),
+                            actor_id=kasir_name,
+                            actor_name=kasir_name,
+                            actor_role="kasir",
+                            cabang=cabang
+                        )
             customer_id = new_customer.id
             # Re-query to get raw document with ObjectId (create_customer returns string id)
             customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
