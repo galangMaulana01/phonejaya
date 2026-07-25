@@ -1,37 +1,334 @@
 from datetime import datetime, timezone
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.schemas.customer import CustomerCreateRequest, CustomerResponse
+from bson import ObjectId
+from fastapi import HTTPException
+from app.schemas.customer import (
+    CustomerCreateRequest, CustomerVerifyRequest, CustomerRejectRequest,
+    CustomerResubmitRequest, CustomerResponse, CustomerListItem, CustomerStatusEnum
+)
 from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
 
 
 def _fmt(doc: dict) -> CustomerResponse:
     return CustomerResponse(
-        id=str(doc["_id"]), nama=doc["nama"],
-        kontak=doc["kontak"], cabang=doc.get("cabang", ""),
-        created_at=fmt_waktu(doc["created_at"]),
+        id=str(doc["_id"]),
+        nama=doc["nama"],
+        kontak=doc["kontak"],
+        cabang=doc.get("cabang", ""),
+        status=doc.get("status", "Pending"),
         points=doc.get("points", 0),
+        created_at=fmt_waktu(doc.get("created_at")),
+        verified_at=fmt_waktu(doc.get("verified_at")) if doc.get("verified_at") else None,
+        verified_by=doc.get("verified_by"),
+        rejected_at=fmt_waktu(doc.get("rejected_at")) if doc.get("rejected_at") else None,
+        rejected_by=doc.get("rejected_by"),
+        rejected_reason=doc.get("rejected_reason"),
+        status_history=doc.get("status_history", []),
     )
 
 
-async def list_customer(db, q: Optional[str]=None, cabang: Optional[str]=None) -> List[CustomerResponse]:
-    query: dict = {}
-    if cabang:
-        query["cabang"] = cabang
-    if q: query["$or"] = [{"nama":{"$regex":q,"$options":"i"}},{"kontak":{"$regex":q,"$options":"i"}}]
-    docs = await db.customers.find(query).sort("nama", 1).to_list(length=None)
-    return [_fmt(d) for d in docs]
+def _fmt_list(doc: dict) -> CustomerListItem:
+    return CustomerListItem(
+        id=str(doc["_id"]),
+        nama=doc["nama"],
+        kontak=doc["kontak"],
+        cabang=doc.get("cabang", ""),
+        status=doc.get("status", "Pending"),
+        points=doc.get("points", 0),
+        created_at=fmt_waktu(doc.get("created_at")),
+        verified_at=fmt_waktu(doc.get("verified_at")) if doc.get("verified_at") else None,
+        verified_by=doc.get("verified_by"),
+        rejected_at=fmt_waktu(doc.get("rejected_at")) if doc.get("rejected_at") else None,
+        rejected_by=doc.get("rejected_by"),
+        rejected_reason=doc.get("rejected_reason"),
+    )
 
 
-async def create_customer(db, payload: CustomerCreateRequest, actor: str) -> CustomerResponse:
+async def _add_status_history(
+    db: AsyncIOMotorDatabase,
+    customer_id: ObjectId,
+    status_lama: str,
+    status_baru: str,
+    actor_id: str,
+    actor_name: str,
+    actor_role: str,
+    reason: str = "",
+) -> None:
+    """Add status history entry to customer document."""
+    history_entry = {
+        "status_lama": status_lama,
+        "status_baru": status_baru,
+        "actor_id": actor_id,
+        "actor_name": actor_name,
+        "actor_role": actor_role,
+        "timestamp": datetime.now(timezone.utc),
+        "reason": reason if reason else None,
+    }
+    await db.customers.update_one(
+        {"_id": customer_id},
+        {"$push": {"status_history": history_entry}}
+    )
+
+
+async def create_customer(
+    db: AsyncIOMotorDatabase,
+    payload: CustomerCreateRequest,
+    actor_id: str,
+    actor_name: str,
+    actor_role: str,
+    cabang: str,
+) -> CustomerResponse:
+    # Check duplicate kontak per cabang
+    existing = await db.customers.find_one({"kontak": payload.kontak, "cabang": cabang})
+    if existing:
+        raise HTTPException(409, "Nomor kontak sudah terdaftar di cabang ini")
+
+    now = datetime.now(timezone.utc)
     doc = {
-        "nama": payload.nama, "kontak": payload.kontak,
-        "cabang": payload.cabang,
-        "created_at": datetime.now(timezone.utc),
+        "nama": payload.nama,
+        "kontak": payload.kontak,
+        "cabang": cabang,
+        "status": "Pending",
         "points": 0,
+        "created_at": now,
+        "created_by": actor_id,
+        "created_by_name": actor_name,
+        "created_by_role": actor_role,
+        "status_history": [{
+            "status_lama": "",
+            "status_baru": "Pending",
+            "actor_id": actor_id,
+            "actor_name": actor_name,
+            "actor_role": actor_role,
+            "timestamp": now,
+            "reason": None,
+        }],
     }
     result = await db.customers.insert_one(doc)
     doc["_id"] = result.inserted_id
-    await write_log(db, actor, "Tambah Customer", payload.nama, payload.cabang)
+
+    await write_log(
+        db, actor_id, "Tambah Customer",
+        f"{payload.nama} ({payload.kontak}) - Pending", cabang
+    )
+
     return _fmt(doc)
+
+
+async def list_customers(
+    db: AsyncIOMotorDatabase,
+    cabang: Optional[str] = None,
+    status: Optional[str] = None,
+) -> List[CustomerListItem]:
+    query: dict = {}
+    if cabang:
+        query["cabang"] = cabang
+    if status:
+        query["status"] = status
+
+    docs = await db.customers.find(query).sort("created_at", -1).to_list(length=200)
+    return [_fmt_list(d) for d in docs]
+
+
+async def get_customer_detail(
+    db: AsyncIOMotorDatabase,
+    customer_id: str,
+) -> CustomerResponse:
+    doc = await db.customers.find_one({"_id": ObjectId(customer_id)})
+    if not doc:
+        raise HTTPException(404, "Customer tidak ditemukan")
+    return _fmt(doc)
+
+
+async def _validate_transition(
+    current_status: str,
+    target_status: str,
+    actor_role: str,
+) -> None:
+    """Strict state machine validation."""
+    allowed_transitions = {
+        "Pending": ["Verified", "Rejected"],
+        "Rejected": ["Pending"],  # Resubmit
+    }
+
+    if current_status not in allowed_transitions:
+        raise HTTPException(400, f"Status {current_status} tidak bisa diubah")
+
+    if target_status not in allowed_transitions[current_status]:
+        raise HTTPException(
+            400,
+            f"Transisi dari {current_status} ke {target_status} tidak diizinkan"
+        )
+
+    # Authorization check
+    if target_status in ["Verified", "Rejected"] and actor_role not in ["kepala_cabang", "owner"]:
+        raise HTTPException(403, "Hanya Kepala Cabang atau Owner yang bisa approve/reject")
+
+    if target_status == "Pending" and actor_role not in ["kasir", "teknisi", "kepala_cabang", "owner"]:
+        raise HTTPException(403, "Hanya Kasir/Teknisi/Kepala Cabang/Owner yang bisa resubmit")
+
+
+async def _add_status_history(
+    db: AsyncIOMotorDatabase,
+    customer_id: ObjectId,
+    status_lama: str,
+    status_baru: str,
+    actor_id: str,
+    actor_name: str,
+    actor_role: str,
+    reason: str = "",
+) -> None:
+    """Add status history entry to customer document."""
+    history_entry = {
+        "status_lama": status_lama,
+        "status_baru": status_baru,
+        "actor_id": actor_id,
+        "actor_name": actor_name,
+        "actor_role": actor_role,
+        "timestamp": datetime.now(timezone.utc),
+        "reason": reason if reason else None,
+    }
+    await db.customers.update_one(
+        {"_id": customer_id},
+        {"$push": {"status_history": history_entry}}
+    )
+
+
+async def approve_customer(
+    db: AsyncIOMotorDatabase,
+    customer_id: str,
+    actor_id: str,
+    actor_name: str,
+    actor_role: str,
+) -> CustomerResponse:
+    doc = await db.customers.find_one({"_id": ObjectId(customer_id)})
+    if not doc:
+        raise HTTPException(404, "Customer tidak ditemukan")
+
+    current_status = doc.get("status", "Pending")
+    await _validate_transition(current_status, "Verified", actor_role)
+
+    update = {
+        "status": "Verified",
+        "verified_at": datetime.now(timezone.utc),
+        "verified_by": actor_id,
+        "verified_by_name": actor_name,
+        "verified_by_role": actor_role,
+    }
+
+    # Add status history
+    await _add_status_history(
+        db, ObjectId(customer_id), current_status, "Verified",
+        actor_id, actor_name, actor_role, ""
+    )
+
+    await db.customers.update_one({"_id": ObjectId(customer_id)}, {"$set": update})
+
+    updated = await db.customers.find_one({"_id": ObjectId(customer_id)})
+
+    await write_log(
+        db, actor_id, "Approve Customer",
+        f"{doc['nama']} diverifikasi", doc.get("cabang", "")
+    )
+
+    return _fmt(updated)
+
+
+async def reject_customer(
+    db: AsyncIOMotorDatabase,
+    customer_id: str,
+    reason: str,
+    actor_id: str,
+    actor_name: str,
+    actor_role: str,
+) -> CustomerResponse:
+    doc = await db.customers.find_one({"_id": ObjectId(customer_id)})
+    if not doc:
+        raise HTTPException(404, "Customer tidak ditemukan")
+
+    current_status = doc.get("status", "Pending")
+    await _validate_transition(current_status, "Rejected", actor_role)
+
+    if not reason or not reason.strip():
+        raise HTTPException(400, "Alasan reject wajib diisi")
+
+    update = {
+        "status": "Rejected",
+        "rejected_at": datetime.now(timezone.utc),
+        "rejected_by": actor_id,
+        "rejected_by_name": actor_name,
+        "rejected_by_role": actor_role,
+        "rejected_reason": reason.strip(),
+    }
+
+    # Add status history
+    await _add_status_history(
+        db, ObjectId(customer_id), current_status, "Rejected",
+        actor_id, actor_name, actor_role, reason.strip()
+    )
+
+    await db.customers.update_one({"_id": ObjectId(customer_id)}, {"$set": update})
+
+    updated = await db.customers.find_one({"_id": ObjectId(customer_id)})
+
+    await write_log(
+        db, actor_id, "Reject Customer",
+        f"{doc['nama']} ditolak: {reason}", doc.get("cabang", "")
+    )
+
+    return _fmt(updated)
+
+
+async def resubmit_customer(
+    db: AsyncIOMotorDatabase,
+    customer_id: str,
+    actor_id: str,
+    actor_name: str,
+    actor_role: str,
+) -> CustomerResponse:
+    doc = await db.customers.find_one({"_id": ObjectId(customer_id)})
+    if not doc:
+        raise HTTPException(404, "Customer tidak ditemukan")
+
+    current_status = doc.get("status", "Pending")
+    await _validate_transition(current_status, "Pending", actor_role)
+
+    if current_status != "Rejected":
+        raise HTTPException(400, "Hanya customer Rejected yang bisa di-resubmit")
+
+    update = {
+        "status": "Pending",
+        "resubmitted_at": datetime.now(timezone.utc),
+        "resubmitted_by": actor_id,
+        "resubmitted_by_name": actor_name,
+        "resubmitted_by_role": actor_role,
+    }
+
+    # Add status history
+    await _add_status_history(
+        db, ObjectId(customer_id), current_status, "Pending",
+        actor_id, actor_name, actor_role, "Resubmit after rejection"
+    )
+
+    await db.customers.update_one({"_id": ObjectId(customer_id)}, {"$set": update})
+
+    updated = await db.customers.find_one({"_id": ObjectId(customer_id)})
+
+    await write_log(
+        db, actor_id, "Resubmit Customer",
+        f"{doc['nama']} diajukan ulang", doc.get("cabang", "")
+    )
+
+    return _fmt(updated)
+
+
+async def get_pending_count(
+    db: AsyncIOMotorDatabase,
+    cabang: Optional[str] = None,
+) -> int:
+    query = {"status": "Pending"}
+    if cabang:
+        query["cabang"] = cabang
+    return await db.customers.count_documents(query)

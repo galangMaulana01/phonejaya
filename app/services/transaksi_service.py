@@ -158,6 +158,13 @@ async def create_transaksi(
     # ── Points logic ──
     trx_id = await next_trx_id(db)
     if customer_doc and poin_dipakai > 0:
+        # Check customer status - only Verified can redeem points
+        customer_status = customer_doc.get("status", "Pending")
+        if customer_status != "Verified":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Customer status {customer_status}: hanya customer Verified yang bisa klaim poin"
+            )
         if poin_dipakai > customer_doc.get("points", 0):
             raise HTTPException(status_code=400, detail="Poin customer tidak cukup")
         diskon_poin = poin_dipakai * 1000

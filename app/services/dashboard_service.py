@@ -56,6 +56,12 @@ async def get_stats(
               "kasir": d["kasir"], "harga_jual": d["harga_jual"], "profit": d["profit"],
               "waktu": fmt_waktu(d["waktu"])} for d in recent_docs]
 
+    # Pending customers count
+    pending_customers_query = {"status": "Pending"}
+    if cabang:
+        pending_customers_query["cabang"] = cabang
+    pending_customers = await db.customers.count_documents(pending_customers_query)
+
     return {
         "unit": {"total": total_unit, "tersedia": status_map.get("Tersedia",0),
                  "sold": status_map.get("Sold",0), "booking": status_map.get("Booking",0),
@@ -64,6 +70,7 @@ async def get_stats(
                      "total_profit": fin["total_profit"], "profit_harian": profit_harian,
                      "total_transaksi": fin["total_trx"]},
         "recent_transaksi": recent,
+        "pending_customers": pending_customers,
     }
 
 
