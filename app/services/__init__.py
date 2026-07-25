@@ -3,7 +3,7 @@ from app.services.unit_service import list_units, create_unit, approve_repair
 from app.services.transaksi_service import list_transaksi, create_transaksi, create_transaksi_sparepart
 from app.services.karyawan_service import list_karyawan, create_karyawan, reset_password
 from app.services.service_service import list_service, get_service, update_service
-from app.services.customer_service import list_customer, create_customer
+from app.services.customer_service import list_customers, create_customer
 from app.services.sparepart import list_sparepart, create_sparepart, update_stok
 from app.services.cabang_service import list_cabang, create_cabang, update_cabang, assign_kepala_cabang, pecat_karyawan
 from app.services.request_sparepart_service import list_requests as list_request_sparepart, create_request as create_request_sparepart, respond_request as respond_request_sparepart
@@ -28,7 +28,7 @@ __all__ = [
     "list_transaksi", "create_transaksi", "create_transaksi_sparepart",
     "list_karyawan", "create_karyawan", "reset_password",
     "list_service", "get_service", "update_service",
-    "list_customer", "create_customer",
+    "list_customers", "create_customer",
     "list_sparepart", "create_sparepart", "update_stok",
     "list_cabang", "create_cabang", "update_cabang", "assign_kepala_cabang", "pecat_karyawan",
     "list_request_sparepart", "create_request_sparepart", "respond_request_sparepart",
