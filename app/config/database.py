@@ -12,10 +12,10 @@ def get_client() -> AsyncIOMotorClient:
     if _client is None:
         _client = AsyncIOMotorClient(
             settings.MONGO_URI,
-            # Timeout settings untuk Vercel serverless
-            serverSelectionTimeoutMS=8000,
-            connectTimeoutMS=8000,
-            socketTimeoutMS=8000,
+            # Timeout settings untuk Vercel serverless — diperpanjang untuk cold start
+            serverSelectionTimeoutMS=30000,
+            connectTimeoutMS=30000,
+            socketTimeoutMS=30000,
             # Pool settings minimal untuk serverless (tiap invocation baru)
             maxPoolSize=5,
             minPoolSize=0,
@@ -23,8 +23,8 @@ def get_client() -> AsyncIOMotorClient:
             retryWrites=True,
             retryReads=True,
             # Tutup idle connection lebih cepat
-            maxIdleTimeMS=10000,
-            waitQueueTimeoutMS=5000,
+            maxIdleTimeMS=30000,
+            waitQueueTimeoutMS=10000,
         )
         logger.info("MongoDB client created — db: %s", settings.MONGO_DB)
     return _client
@@ -86,7 +86,7 @@ async def init_db() -> None:
     # Request sparepart - unique req_id
     await db.request_sparepart.create_index("req_id", unique=True)
     
-    # Customers - unique nama per cabang (per-cabang customer policy)
-    await db.customers.create_index([("nama", 1), ("cabang", 1)], unique=True)
+    # Customers - unique kontak per cabang (same kontak different cabang = allowed)
+    await db.customers.create_index([("kontak", 1), ("cabang", 1)], unique=True)
     
     logger.info("Database indexes created/verified")

@@ -1,5 +1,6 @@
 import logging
 import logging.config
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -13,13 +14,41 @@ from app.routes import (
     service, customer, sparepart, cabang, request_sparepart,
     transfer_stok, influencer, upload, cod,
 )
-from app.config.database import init_db
+from app.config.database import init_db, get_db
+import logging
+
+logger = logging.getLogger(__name__)
 
 logging.basicConfig(
     level=logging.INFO if settings.is_production else logging.DEBUG,
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
 )
-logger = logging.getLogger(__name__)
+
+
+async def warmup_db():
+    """Warm up MongoDB connection on startup to avoid cold start latency."""
+    try:
+        db = await init_db()
+        # Test connection with a simple ping
+        await db.command("ping")
+        # Verify customers collection exists
+        collections = await db.list_collection_names()
+        logger.info("Database connection warmup successful. Collections: %s", collections)
+        return True
+    except Exception as e:
+        logger.warning("Database warmup failed: %s", e)
+        return False
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Application starting up...")
+    await warmup_db()
+    logger.info("Application startup complete")
+    yield
+    # Shutdown
+    logger.info("Application shutting down...")
 
 
 def create_app() -> FastAPI:
@@ -29,6 +58,7 @@ def create_app() -> FastAPI:
         version="2.0.0",
         docs_url=None if settings.is_production else "/docs",
         redoc_url=None if settings.is_production else "/redoc",
+        lifespan=lifespan,
     )
 
     # Rate limiter

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.database import get_db
@@ -9,6 +9,9 @@ from app.schemas.customer import (
 from app.schemas.common import ok
 from app.services import customer_service
 from app.middlewares.auth import get_current_user, require_kasir_teknisi_or_owner, require_kepala_or_owner, require_owner
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/customers", tags=["Customer"])
 
@@ -21,14 +24,20 @@ async def create_customer(
 ):
     """Kasir membuat customer baru (status: Pending)."""
     cabang = user.get("cabang")
-    item = await customer_service.create_customer(
-        db,
-        payload=body,
-        actor_id=user.get("sub", ""),
-        actor_name=user.get("name", user.get("username", "")),
-        actor_role=user.get("role", ""),
-        cabang=cabang,
-    )
+    try:
+        item = await customer_service.create_customer(
+            db,
+            payload=body,
+            actor_id=user.get("sub", ""),
+            actor_name=user.get("name", user.get("username", "")),
+            actor_role=user.get("role", ""),
+            cabang=cabang,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to create customer")
+        raise HTTPException(status_code=500, detail="Gagal membuat customer")
     return ok(item.model_dump(), message=f"Customer {item.nama} dibuat (Pending approval)")
 
 
