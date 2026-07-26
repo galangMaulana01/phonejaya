@@ -30,6 +30,8 @@ def _fmt(doc: dict) -> TransaksiResponse:
         poin_dapat    = doc.get("poin_dapat", 0),
         cabang        = doc["cabang"],
         customer_type = doc.get("customer_type", "member"),
+        customer_nama = doc.get("customer_nama", ""),
+        customer_kontak = doc.get("customer_kontak", ""),
         sp_items      = doc.get("sp_items"),
         foto_serah_terima=doc.get("foto_serah_terima"),
     )

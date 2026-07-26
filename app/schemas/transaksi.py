@@ -52,6 +52,8 @@ class TransaksiResponse(BaseModel):
     poin_dapat: int = 0
     cabang:       str
     customer_type: str = "member"  # "member" | "guest"
+    customer_nama: str = ""
+    customer_kontak: str = ""
     sp_items: Optional[list] = None
     foto_serah_terima: Optional[str] = None
 
