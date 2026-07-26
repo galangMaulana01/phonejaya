@@ -29,6 +29,7 @@ def _fmt(doc: dict) -> TransaksiResponse:
         poin_dipakai  = doc.get("poin_dipakai", 0),
         poin_dapat    = doc.get("poin_dapat", 0),
         cabang        = doc["cabang"],
+        customer_type = doc.get("customer_type", "member"),
         sp_items      = doc.get("sp_items"),
         foto_serah_terima=doc.get("foto_serah_terima"),
     )
@@ -134,59 +135,70 @@ async def create_transaksi(
     all_labels = unit_label_parts + sp_labels
     label_combined = " + ".join(all_labels) if all_labels else "Transaksi"
 
-    # ── Auto-create customer ──
+    # ── Guest vs Member logic ──
+    customer_type = payload.customer_type if payload.customer_type in ["member", "guest"] else "member"
     customer_id = None
     customer_doc = None
-    if payload.customer_nama and payload.customer_nama.strip():
-        # Per-cabang: lookup by nama + cabang (same customer name in different branches = different customers)
-        customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
-        if customer_doc:
-            customer_id = str(customer_doc["_id"])
-        else:
-            new_customer = await create_customer(db,
-                            __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
-                                nama=payload.customer_nama.strip(),
-                                kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
-                                cabang=cabang
-                            ),
-                            actor_id=kasir_name,
-                            actor_name=kasir_name,
-                            actor_role="kasir",
-                            cabang=cabang
-                        )
-            customer_id = new_customer.id
-            # Re-query to get raw document with ObjectId (create_customer returns string id)
+    poin_dipakai = 0
+    poin_baru = 0
+    harga_jual_final = 0
+
+    if customer_type == "member":
+        # ── Member flow: auto-create/find customer, points, verification ──
+        if payload.customer_nama and payload.customer_nama.strip():
             customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
+            if customer_doc:
+                customer_id = str(customer_doc["_id"])
+            else:
+                new_customer = await create_customer(db,
+                                __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
+                                    nama=payload.customer_nama.strip(),
+                                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
+                                    cabang=cabang
+                                ),
+                                actor_id=kasir_name,
+                                actor_name=kasir_name,
+                                actor_role="kasir",
+                                cabang=cabang
+                            )
+                customer_id = new_customer.id
+                customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
 
-    # ── Points logic ──
-    trx_id = await next_trx_id(db)
-    if customer_doc and poin_dipakai > 0:
-        # Check customer status - only Verified can redeem points
-        customer_status = customer_doc.get("status", "Pending")
-        if customer_status != "Verified":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Customer status {customer_status}: hanya customer Verified yang bisa klaim poin"
-            )
-        if poin_dipakai > customer_doc.get("points", 0):
-            raise HTTPException(status_code=400, detail="Poin customer tidak cukup")
-        diskon_poin = poin_dipakai * 1000
-        harga_jual_final = harga_jual_base - diskon_poin
-        if harga_jual_final < 0:
-            raise HTTPException(status_code=400, detail="Poin terlalu banyak, harga tidak boleh negatif")
+        # Points logic for member
+        trx_id = await next_trx_id(db)
+        if customer_doc and poin_dipakai > 0:
+            customer_status = customer_doc.get("status", "Pending")
+            if customer_status != "Verified":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Customer status {customer_status}: hanya customer Verified yang bisa klaim poin"
+                )
+            if poin_dipakai > customer_doc.get("points", 0):
+                raise HTTPException(status_code=400, detail="Poin customer tidak cukup")
+            diskon_poin = poin_dipakai * 1000
+            harga_jual_final = harga_jual_base - diskon_poin
+            if harga_jual_final < 0:
+                raise HTTPException(status_code=400, detail="Poin terlalu banyak, harga tidak boleh negatif")
+        else:
+            harga_jual_final = harga_jual_base
+
+        poin_baru = int(harga_jual_final // 100000)
+
+        if customer_doc:
+            net_poin = -poin_dipakai + poin_baru
+            if net_poin != 0:
+                await db.customers.update_one(
+                    {"_id": customer_doc["_id"]},
+                    {"$inc": {"points": net_poin}}
+                )
     else:
-        harga_jual_final = harga_jual_base
+        # ── Guest flow: no customer creation, no points, no verification ──
+        customer_type = "guest"
+        customer_id = None
+        customer_doc = None
         poin_dipakai = 0
-
-    poin_baru = int(harga_jual_final // 100000)
-
-    if customer_doc:
-        net_poin = -poin_dipakai + poin_baru
-        if net_poin != 0:
-            await db.customers.update_one(
-                {"_id": customer_doc["_id"]},
-                {"$inc": {"points": net_poin}}
-            )
+        poin_baru = int(harga_jual_base // 100000)
+        harga_jual_final = harga_jual_base
 
     profit = harga_jual_final - harga_modal_total
     now = datetime.now(timezone.utc)
@@ -200,21 +212,22 @@ async def create_transaksi(
         tipe = "sparepart"
 
     doc = {
-        "trx_id":        trx_id,
+        "trx_id":        await next_trx_id(db),
         "tipe":          tipe,
         "unit_id":       payload.unit_id if has_unit else None,
         "unit_label":    label_combined,
         "kasir":         kasir_name,
         "harga_jual":    harga_jual_final,
         "harga_modal":   harga_modal_total,
-        "profit":        profit,
+        "profit":        harga_jual_final - harga_modal_total,
         "garansi_hari":  payload.garansi_hari if has_unit else 0,
         "biaya_garansi": payload.biaya_garansi if has_unit else 0,
-        "poin_dipakai":  poin_dipakai,
+        "poin_dipakai":  0 if customer_type == "guest" else poin_dipakai,
         "poin_dapat":    poin_baru,
-        "waktu":         now,
+        "waktu":         datetime.now(timezone.utc),
         "catatan":       payload.catatan,
         "cabang":        cabang,
+        "customer_type": customer_type,
         "customer_nama":  payload.customer_nama.strip() if payload.customer_nama else "",
         "customer_kontak": payload.customer_kontak.strip() if payload.customer_kontak else "",
         "customer_id":    customer_id,
@@ -223,7 +236,7 @@ async def create_transaksi(
     }
     result = await db.transaksi.insert_one(doc)
     doc["_id"] = result.inserted_id
-    await write_log(db, kasir_name, "Input Transaksi", f"{trx_id} • {label_combined}", cabang)
+    await write_log(db, kasir_name, "Input Transaksi", f"{doc['trx_id']} • {label_combined}", cabang)
     return _fmt(doc)
 
 

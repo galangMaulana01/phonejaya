@@ -4,6 +4,7 @@ from typing import Optional, List
 
 class TransaksiCreateRequest(BaseModel):
     """Transaksi gabungan: HP +/ sparepart."""
+    customer_type: str = "member"  # "member" | "guest"
     unit_id:  str = ""          # opsional — kosong kalau jual sparepart saja
     imei:          str = ""
     catatan:       str = ""
@@ -50,6 +51,7 @@ class TransaksiResponse(BaseModel):
     poin_dipakai: int = 0
     poin_dapat: int = 0
     cabang:       str
+    customer_type: str = "member"  # "member" | "guest"
     sp_items: Optional[list] = None
     foto_serah_terima: Optional[str] = None
 
