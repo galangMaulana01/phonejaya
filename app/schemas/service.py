@@ -63,3 +63,4 @@ class ServiceResponse(BaseModel):
     updated_at:       Optional[str] = None
     foto_before_urls: List[str] = []
     foto_after_urls:  List[str] = []
+    sparepart_items:  List[dict] = []

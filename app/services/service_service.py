@@ -32,6 +32,7 @@ def _fmt(doc: dict) -> ServiceResponse:
         updated_at=fmt_waktu(doc["updated_at"]) if doc.get("updated_at") else None,
         foto_before_urls=doc.get("foto_before_urls", []),
         foto_after_urls=doc.get("foto_after_urls", []),
+        sparepart_items=doc.get("sparepart_items", []),
     )
 
 

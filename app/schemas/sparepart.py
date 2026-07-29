@@ -15,6 +15,7 @@ class SparepartCreateRequest(BaseModel):
     dimensi_t:   Optional[float] = None   # tinggi (cm)
     catatan:     str = ""
     cabang:      str = "JYP"
+    product_link: Optional[str] = None
 
     @field_validator("nama")
     @classmethod
@@ -22,6 +23,16 @@ class SparepartCreateRequest(BaseModel):
         if not v.strip():
             raise ValueError("Nama sparepart tidak boleh kosong")
         return v.strip()
+
+    @field_validator("product_link")
+    @classmethod
+    def validate_product_link(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v.strip() == "":
+            return None
+        v = v.strip()
+        if not v.startswith("https://"):
+            raise ValueError("Link produk harus menggunakan HTTPS")
+        return v
 
 
 class SparepartUpdateStokRequest(BaseModel):

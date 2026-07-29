@@ -17,6 +17,7 @@ class KCResponseStatusEnum(str, Enum):
 
 class RequestSparepartCreateRequest(BaseModel):
     tipe:       str
+    service_id: str  # WAJIB: ID service tiket yang butuh sparepart
     sp_id:      Optional[str] = None
     nama_sp:    str
     jumlah:     int = 1
@@ -29,6 +30,19 @@ class RequestSparepartCreateRequest(BaseModel):
     def not_empty(cls, v: str) -> str:
         if not v.strip(): raise ValueError("Nama tidak boleh kosong")
         return v.strip()
+
+    @field_validator("product_link")
+    @classmethod
+    def validate_product_link(cls, v: Optional[str], info) -> Optional[str]:
+        sp_id = info.data.get("sp_id")
+        if sp_id is None or sp_id == "":
+            # sp_id kosong -> product_link wajib
+            if not v or not v.strip():
+                raise ValueError("Link produk wajib diisi jika sparepart belum ada di stok (sp_id kosong)")
+            v = v.strip()
+            if not v.startswith("https://"):
+                raise ValueError("Link produk harus menggunakan HTTPS")
+        return v
 
 
 class RequestSparepartResponseRequest(BaseModel):
@@ -55,6 +69,8 @@ class RequestSparepartResponse(BaseModel):
     id:               str
     req_id:           str
     tipe:             str
+    service_id:       Optional[str] = None
+    unit_id:          Optional[str] = None
     sp_id:            Optional[str] = None
     nama_sp:          str
     jumlah:           int
@@ -72,3 +88,6 @@ class RequestSparepartResponse(BaseModel):
     approved_at:      Optional[str] = None
     created_at:       str
     updated_at:       Optional[str] = None
+    # Snapshot fields for legacy/history consistency
+    harga_modal_snapshot: Optional[int] = None
+    unit_nama_snapshot:   Optional[str] = None

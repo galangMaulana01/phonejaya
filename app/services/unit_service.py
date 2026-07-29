@@ -35,6 +35,8 @@ async def route_unit_to_inventory_or_service(
     if is_repair:
         service_id = await next_service_id(db)
         now = datetime.now(timezone.utc)
+        # Ensure sparepart_items is a list (not None)
+        sp_items = sparepart_items or []
         service_doc = {
             "service_id": service_id,
             "unit_id": unit_id,
@@ -49,7 +51,7 @@ async def route_unit_to_inventory_or_service(
             "foto_before_urls": [],
             "foto_after_urls": [],
             "cabang": cabang,
-            "sparepart_items": sparepart_items or [],
+            "sparepart_items": sp_items,
             "created_at": now,
             "updated_at": None,
             "created_by": actor,
@@ -220,7 +222,10 @@ async def create_unit(
     # Kalau Repair → auto-create tiket service via reusable routing function
     if is_repair:
         unit_label = f"{payload.merk} {payload.tipe} {payload.storage}" + (f" {payload.ram}" if payload.ram and payload.ram != "-" else "")
-        sp_items = [{"sp_id": s.sp_id, "jumlah": s.jumlah} for s in payload.sparepart_items] if payload.sparepart_items else []
+        sp_items = [
+            {"sp_id": s.sp_id, "jumlah": s.jumlah, "purchase_url": s.purchase_url}
+            for s in payload.sparepart_items
+        ] if payload.sparepart_items else []
         await route_unit_to_inventory_or_service(
             db, unit_id, unit_label, "Repair", payload.cabang, actor,
             keluhan=payload.keluhan, sparepart_items=sp_items

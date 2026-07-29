@@ -3,11 +3,29 @@ from typing import Optional, List
 from enum import Enum
 from datetime import datetime
 import re
+from urllib.parse import urlparse
 
 
 class SparepartItem(BaseModel):
     sp_id:  str
     jumlah: int = 1
+    purchase_url: Optional[str] = None
+
+    @field_validator("purchase_url")
+    @classmethod
+    def validate_purchase_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v.strip() == "":
+            return None
+        v = v.strip()
+        if not v.startswith("https://"):
+            raise ValueError("Link pembelian harus menggunakan HTTPS")
+        try:
+            result = urlparse(v)
+            if not result.netloc:
+                raise ValueError("URL tidak valid")
+        except Exception:
+            raise ValueError("Format URL tidak valid")
+        return v
 
 
 class StatusEnum(str, Enum):

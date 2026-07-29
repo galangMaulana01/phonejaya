@@ -1,0 +1,12 @@
+name: Auto Redeploy to Vercel
+
+on:
+  push:
+    branches: [ main ]  # Ganti kalau branch-mu bukan main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Vercel Deployment
+        run: curl -X POST "${{ secrets.VERCEL_DEPLOY_HOOK }}"

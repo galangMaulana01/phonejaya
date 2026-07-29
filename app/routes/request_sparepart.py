@@ -8,9 +8,9 @@ from app.schemas.request_sparepart import (
 )
 from app.schemas.common import ok
 from app.services.request_sparepart_service import (
-    list_requests, create_request, respond_request, approve_request as approve_request_service
+    list_requests, create_request, respond_request, approve_request, get_request_detail
 )
-from app.middlewares.auth import require_kasir_teknisi_or_owner, require_kepala_or_owner, require_kasir
+from app.middlewares.auth import require_kepala_or_owner, require_kasir, require_any
 
 router = APIRouter(prefix="/request-sparepart", tags=["Request Sparepart"])
 
@@ -20,27 +20,42 @@ router = APIRouter(prefix="/request-sparepart", tags=["Request Sparepart"])
 async def get_requests(
     status: Optional[str] = Query(None),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    user:   dict = Depends(require_kasir_teknisi_or_owner),
+    user:   dict = Depends(require_any),
 ):
     cab = None if user.get("role") == "owner" else user.get("cabang")
     items = await list_requests(db, cabang=cab, status=status)
     return ok([i.model_dump() for i in items])
 
 
-# POST /request-sparepart - Create request (Teknisi/Kasir/KC)
+# GET /request-sparepart/{req_id} - Get request detail
+@router.get("/{req_id}")
+async def get_request(
+    req_id: str,
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_any),
+):
+    item = await get_request_detail(db, req_id)
+    # Validate cabang ownership for non-owner
+    if user.get("role") != "owner" and item.cabang != user.get("cabang"):
+        from fastapi import HTTPException
+        raise HTTPException(403, "Request bukan milik cabang Anda")
+    return ok(item.model_dump())
+
+
+# POST /request-sparepart - Create request (Teknisi only, must have service_id)
 @router.post("", status_code=201)
 async def buat_request(
     body: RequestSparepartCreateRequest,
     db:   AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_teknisi_or_owner),
+    user: dict = Depends(require_any),
 ):
-    # Only Teknisi can create requests; Kasir no longer creates
-    if user.get("role") == "kasir":
+    # Only teknisi can create requests
+    if user.get("role") != "teknisi":
         from fastapi import HTTPException
-        raise HTTPException(403, "Kasir tidak bisa membuat request sparepart. Gunakan menu Approval Sparepart.")
-    
+        raise HTTPException(403, "Hanya Teknisi yang bisa membuat request sparepart. Gunakan menu Approval Sparepart untuk Kasir/Kepala Cabang.")
+
     body.cabang = user.get("cabang", body.cabang)
-    item = await create_request(db, payload=body, actor=user.get("name", user.get("username","")))
+    item = await create_request(db, payload=body, actor=user.get("name", user.get("username","")), actor_id=user.get("sub", ""))
     return ok(item.model_dump(), message=f"{item.req_id} berhasil diajukan")
 
 
@@ -69,7 +84,7 @@ async def approve_request(
     db:     AsyncIOMotorDatabase = Depends(get_db),
     user:   dict = Depends(require_kasir),
 ):
-    item = await approve_request_service(
+    item = await approve_request(
         db, req_id=req_id, payload=body,
         actor=user.get("name", user.get("username","")),
         actor_role=user.get("role",""),
