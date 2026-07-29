@@ -74,7 +74,7 @@ async def create_request(
             detail=f"Service status {svc.get('status')} tidak bisa request sparepart. Harus Proses atau Selesai."
         )
 
-    if svc.get("teknisi_id") != actor_id:
+    if svc.get("teknisi") != actor:
         raise HTTPException(
             status_code=403,
             detail="Hanya teknisi yang sedang mengerjakan service ini yang boleh request sparepart"

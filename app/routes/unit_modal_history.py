@@ -5,7 +5,7 @@ from app.config.database import get_db
 from app.schemas.unit_modal_history import UnitModalHistoryResponse
 from app.schemas.common import ok
 from app.services import unit_modal_history
-from app.middlewares.auth import require_kepala_or_owner
+from app.middlewares.auth import require_kasir_teknisi_or_owner
 
 router = APIRouter(prefix="/units", tags=["Unit Modal History"])
 
@@ -17,9 +17,9 @@ async def get_modal_history(
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kepala_or_owner),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
-    """Get modal history for a unit (Owner/Kepala Cabang only)"""
+    """Get modal history for a unit (Owner/Kepala Cabang/Kasir/Teknisi)"""
     # Validate cabang ownership
     if user.get("role") != "owner":
         unit = await db.units.find_one({"unit_id": unit_id})
