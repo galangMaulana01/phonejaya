@@ -236,6 +236,8 @@ async def approve_request(
                 from app.schemas.sparepart import SparepartCreateRequest
 
                 try:
+                    await write_log(db, actor, "Debug Approve", f"About to call create_sparepart for req_id={doc['req_id']}, nama_sp={doc['nama_sp']}, jumlah={doc['jumlah']}, harga_jual={payload.harga_jual}, cabang={doc['cabang']}, product_link={doc.get('product_link')}", doc.get("cabang", ""))
+                    
                     new_sp = await create_sparepart(db, SparepartCreateRequest(
                         nama=doc["nama_sp"],
                         kategori="Sparepart",
@@ -244,15 +246,11 @@ async def approve_request(
                         harga_beli=0,
                         harga_jual=payload.harga_jual,
                         cabang=doc["cabang"],
-                        catatan=f"Auto-created from request {req_id}",
+                        catatan=f"Auto-created from request {doc['req_id']}",
                         product_link=doc.get("product_link")
                     ), actor=actor)
-                    sp_id = new_sp.sp_id
-                    # Update request with sp_id
-                    await db.request_sparepart.update_one(
-                        {"req_id": req_id, "status": "processing_approval"},
-                        {"$set": {"sp_id": sp_id}}
-                    )
+                    
+                    await write_log(db, actor, "Debug Approve", f"create_sparepart succeeded, new_sp.sp_id={new_sp.sp_id}", doc.get("cabang", ""))
                 except HTTPException:
                     raise
                 except Exception as e:
@@ -264,7 +262,7 @@ async def approve_request(
                 sp_id = new_sp.sp_id
                 # Update request with sp_id
                 await db.request_sparepart.update_one(
-                    {"req_id": req_id, "status": "processing_approval"},
+                    {"req_id": doc["req_id"], "status": "processing_approval"},
                     {"$set": {"sp_id": sp_id}}
                 )
 
@@ -282,7 +280,7 @@ async def approve_request(
                 # Log modal history via write_log (known limitation: no rollback on rejection/revision)
                 await write_log(
                     db, actor, "Update Modal Sparepart",
-                    f"Unit {unit_id} modal +Rp{delta:,} (dari Rp{old_modal:,} -> Rp{new_modal:,}) via sparepart {doc['nama_sp']} x{doc['jumlah']} @ Rp{payload.harga_jual:,} (ref: {req_id})",
+                    f"Unit {unit_id} modal +Rp{delta:,} (dari Rp{old_modal:,} -> Rp{new_modal:,}) via sparepart {doc['nama_sp']} x{doc['jumlah']} @ Rp{payload.harga_jual:,} (ref: {doc['req_id']})",
                     doc.get("cabang", "")
                 )
                 # TODO: Rollback logic for rejection/revision not implemented (known limitation)
