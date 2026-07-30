@@ -235,17 +235,24 @@ async def approve_request(
                 from app.services.sparepart import create_sparepart
                 from app.schemas.sparepart import SparepartCreateRequest
 
-                new_sp = await create_sparepart(db, SparepartCreateRequest(
-                    nama=doc["nama_sp"],
-                    kategori="Sparepart",
-                    satuan="pcs",
-                    stok=doc["jumlah"],
-                    harga_beli=0,
-                    harga_jual=payload.harga_jual,
-                    cabang=doc["cabang"],
-                    catatan=f"Auto-created from request {req_id}",
-                    product_link=doc.get("product_link")
-                ), actor=actor)
+                try:
+                    new_sp = await create_sparepart(db, SparepartCreateRequest(
+                        nama=doc["nama_sp"],
+                        kategori="Sparepart",
+                        satuan="pcs",
+                        stok=doc["jumlah"],
+                        harga_beli=0,
+                        harga_jual=payload.harga_jual,
+                        cabang=doc["cabang"],
+                        catatan=f"Auto-created from request {req_id}",
+                        product_link=doc.get("product_link")
+                    ), actor=actor)
+                except Exception as e:
+                    # Log the specific error from create_sparepart
+                    import traceback
+                    error_msg = f"create_sparepart failed: {str(e)}\n{traceback.format_exc()}"
+                    await write_log(db, actor, "Error Create Sparepart", error_msg, doc.get("cabang", ""))
+                    raise HTTPException(500, f"Failed to create sparepart: {str(e)}")
                 sp_id = new_sp.sp_id
                 # Update request with sp_id
                 await db.request_sparepart.update_one(
