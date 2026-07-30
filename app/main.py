@@ -92,6 +92,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # HTTPException handler
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"success": False, "message": exc.detail, "data": None},
+        )
+
     # Global error handler
     @app.exception_handler(Exception)
     async def unhandled_exception(request: Request, exc: Exception):
