@@ -182,127 +182,142 @@ async def approve_request(
     if not doc:
         raise HTTPException(409, "Request tidak dalam status Menunggu_Kasir atau sudah diproses")
 
-    # Get unit info
-    unit_id = doc.get("unit_id")
-    service_id = doc.get("service_id")
-    unit_doc = None
-    if unit_id:
-        unit_doc = await db.units.find_one({"unit_id": unit_id})
-        if not unit_doc:
-            # Rollback status
-            await db.request_sparepart.update_one(
-                {"req_id": req_id, "status": "processing_approval"},
-                {"$set": {"status": "Menunggu_Kasir", "updated_at": datetime.now(timezone.utc)}}
-            )
-            raise HTTPException(404, f"Unit {unit_id} tidak ditemukan")
+    try:
+        # Get unit info
+        unit_id = doc.get("unit_id")
+        service_id = doc.get("service_id")
+        unit_doc = None
+        if unit_id:
+            unit_doc = await db.units.find_one({"unit_id": unit_id})
+            if not unit_doc:
+                # Rollback status
+                await db.request_sparepart.update_one(
+                    {"req_id": req_id, "status": "processing_approval"},
+                    {"$set": {"status": "Menunggu_Kasir", "updated_at": datetime.now(timezone.utc)}}
+                )
+                raise HTTPException(404, f"Unit {unit_id} tidak ditemukan")
 
-    # Process approval
-    if payload.status == "Selesai":
-        if payload.harga_jual <= 0:
+        # Process approval
+        if payload.status == "Selesai":
+            if payload.harga_jual <= 0:
+                # Rollback
+                await db.request_sparepart.update_one(
+                    {"req_id": req_id, "status": "processing_approval"},
+                    {"$set": {"status": "Menunggu_Kasir", "updated_at": datetime.now(timezone.utc)}}
+                )
+                raise HTTPException(400, "Harga jual harus diisi untuk status Selesai")
+
+            # Create/Update sparepart master
+            if doc.get("sp_id"):
+                # Existing sparepart: update stok + harga_jual
+                from app.services.sparepart import create_sparepart, update_stok
+                from app.schemas.sparepart import SparepartCreateRequest, SparepartUpdateStokRequest
+
+                existing_sp = await db.sparepart.find_one({"sp_id": doc["sp_id"], "cabang": doc["cabang"]})
+                if existing_sp:
+                    # Update stok
+                    await update_stok(db, doc["sp_id"], SparepartUpdateStokRequest(
+                        delta=doc["jumlah"],
+                        catatan=f"Approve request {req_id}"
+                    ), actor=actor, user_role=actor_role, user_cabang=actor_cabang)
+                    # Update harga_jual if different
+                    if existing_sp.get("harga_jual") != payload.harga_jual:
+                        await db.sparepart.update_one(
+                            {"sp_id": doc["sp_id"], "cabang": doc["cabang"]},
+                            {"$set": {"harga_jual": payload.harga_jual, "updated_at": datetime.now(timezone.utc)}}
+                        )
+                    sp_id = doc["sp_id"]
+                else:
+                    # Create new sparepart (sp_id existed in request but not in master - should not happen)
+                    sp_id = None
+            else:
+                # New sparepart: create new
+                from app.services.sparepart import create_sparepart
+                from app.schemas.sparepart import SparepartCreateRequest
+
+                new_sp = await create_sparepart(db, SparepartCreateRequest(
+                    nama=doc["nama_sp"],
+                    kategori="Sparepart",
+                    satuan="pcs",
+                    stok=doc["jumlah"],
+                    harga_beli=0,
+                    harga_jual=payload.harga_jual,
+                    cabang=doc["cabang"],
+                    catatan=f"Auto-created from request {req_id}",
+                    product_link=doc.get("product_link")
+                ), actor=actor)
+                sp_id = new_sp.sp_id
+                # Update request with sp_id
+                await db.request_sparepart.update_one(
+                    {"req_id": req_id, "status": "processing_approval"},
+                    {"$set": {"sp_id": sp_id}}
+                )
+
+            # Atomic $inc harga_modal unit
+            if unit_id:
+                old_modal = unit_doc.get("harga_modal", 0)
+                delta = payload.harga_jual * doc["jumlah"]
+                new_modal = old_modal + delta
+
+                await db.units.update_one(
+                    {"unit_id": unit_id},
+                    {"$inc": {"harga_modal": delta}, "$set": {"updated_at": datetime.now(timezone.utc)}}
+                )
+
+                # Log modal history via write_log (known limitation: no rollback on rejection/revision)
+                await write_log(
+                    db, actor, "Update Modal Sparepart",
+                    f"Unit {unit_id} modal +Rp{delta:,} (dari Rp{old_modal:,} -> Rp{new_modal:,}) via sparepart {doc['nama_sp']} x{doc['jumlah']} @ Rp{payload.harga_jual:,} (ref: {req_id})",
+                    doc.get("cabang", "")
+                )
+                # TODO: Rollback logic for rejection/revision not implemented (known limitation)
+
+            # Finalize request
+            final_update = {
+                "status": "Selesai",
+                "harga_jual": payload.harga_jual,
+                "approved_by": actor,
+                "approved_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+                "catatan_kc": doc.get("catatan_kc", "") + (" | " + payload.catatan if payload.catatan else ""),
+            }
+        elif payload.status == "Ditolak":
+            final_update = {
+                "status": "Ditolak",
+                "updated_at": datetime.now(timezone.utc),
+                "catatan_kc": doc.get("catatan_kc", "") + (" | " + payload.catatan if payload.catatan else ""),
+            }
+        else:
             # Rollback
             await db.request_sparepart.update_one(
                 {"req_id": req_id, "status": "processing_approval"},
                 {"$set": {"status": "Menunggu_Kasir", "updated_at": datetime.now(timezone.utc)}}
             )
-            raise HTTPException(400, "Harga jual harus diisi untuk status Selesai")
+            raise HTTPException(400, "Status tidak valid")
 
-        # Create/Update sparepart master
-        if doc.get("sp_id"):
-            # Existing sparepart: update stok + harga_jual
-            from app.services.sparepart import create_sparepart, update_stok
-            from app.schemas.sparepart import SparepartCreateRequest, SparepartUpdateStokRequest
+        await db.request_sparepart.update_one(
+            {"req_id": req_id, "status": "processing_approval"},
+            {"$set": final_update}
+        )
 
-            existing_sp = await db.sparepart.find_one({"sp_id": doc["sp_id"], "cabang": doc["cabang"]})
-            if existing_sp:
-                # Update stok
-                await update_stok(db, doc["sp_id"], SparepartUpdateStokRequest(
-                    delta=doc["jumlah"],
-                    catatan=f"Approve request {req_id}"
-                ), actor=actor, user_role=actor_role, user_cabang=actor_cabang)
-                # Update harga_jual if different
-                if existing_sp.get("harga_jual") != payload.harga_jual:
-                    await db.sparepart.update_one(
-                        {"sp_id": doc["sp_id"], "cabang": doc["cabang"]},
-                        {"$set": {"harga_jual": payload.harga_jual, "updated_at": datetime.now(timezone.utc)}}
-                    )
-                sp_id = doc["sp_id"]
-            else:
-                # Create new sparepart (sp_id existed in request but not in master - should not happen)
-                sp_id = None
-        else:
-            # New sparepart: create new
-            from app.services.sparepart import create_sparepart
-            from app.schemas.sparepart import SparepartCreateRequest
+        updated = await db.request_sparepart.find_one({"req_id": req_id})
 
-            new_sp = await create_sparepart(db, SparepartCreateRequest(
-                nama=doc["nama_sp"],
-                kategori="Sparepart",
-                satuan="pcs",
-                stok=doc["jumlah"],
-                harga_beli=0,
-                harga_jual=payload.harga_jual,
-                cabang=doc["cabang"],
-                catatan=f"Auto-created from request {req_id}",
-                product_link=doc.get("product_link")
-            ), actor=actor)
-            sp_id = new_sp.sp_id
-            # Update request with sp_id
-            await db.request_sparepart.update_one(
-                {"req_id": req_id, "status": "processing_approval"},
-                {"$set": {"sp_id": sp_id}}
-            )
-
-        # Atomic $inc harga_modal unit
-        if unit_id:
-            old_modal = unit_doc.get("harga_modal", 0)
-            delta = payload.harga_jual * doc["jumlah"]
-            new_modal = old_modal + delta
-
-            await db.units.update_one(
-                {"unit_id": unit_id},
-                {"$inc": {"harga_modal": delta}, "$set": {"updated_at": datetime.now(timezone.utc)}}
-            )
-
-            # Log modal history via write_log (known limitation: no rollback on rejection/revision)
-            await write_log(
-                db, actor, "Update Modal Sparepart",
-                f"Unit {unit_id} modal +Rp{delta:,} (dari Rp{old_modal:,} -> Rp{new_modal:,}) via sparepart {doc['nama_sp']} x{doc['jumlah']} @ Rp{payload.harga_jual:,} (ref: {req_id})",
-                doc.get("cabang", "")
-            )
-            # TODO: Rollback logic for rejection/revision not implemented (known limitation)
-
-        # Finalize request
-        final_update = {
-            "status": "Selesai",
-            "harga_jual": payload.harga_jual,
-            "approved_by": actor,
-            "approved_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
-            "catatan_kc": doc.get("catatan_kc", "") + (" | " + payload.catatan if payload.catatan else ""),
-        }
-    elif payload.status == "Ditolak":
-        final_update = {
-            "status": "Ditolak",
-            "updated_at": datetime.now(timezone.utc),
-            "catatan_kc": doc.get("catatan_kc", "") + (" | " + payload.catatan if payload.catatan else ""),
-        }
-    else:
-        # Rollback
+        await write_log(db, actor, "Approval Sparepart Kasir", f"{req_id} → {final_update['status']}", doc.get("cabang",""))
+        return _fmt(updated)
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        # Rollback on any unexpected error
         await db.request_sparepart.update_one(
             {"req_id": req_id, "status": "processing_approval"},
             {"$set": {"status": "Menunggu_Kasir", "updated_at": datetime.now(timezone.utc)}}
         )
-        raise HTTPException(400, "Status tidak valid")
-
-    await db.request_sparepart.update_one(
-        {"req_id": req_id, "status": "processing_approval"},
-        {"$set": final_update}
-    )
-
-    updated = await db.request_sparepart.find_one({"req_id": req_id})
-
-    await write_log(db, actor, "Approval Sparepart Kasir", f"{req_id} → {final_update['status']}", doc.get("cabang",""))
-    return _fmt(updated)
+        # Log the actual error for debugging
+        import traceback
+        error_detail = f"Approve error: {str(e)}\n{traceback.format_exc()}"
+        await write_log(db, actor, "Error Approve Sparepart", error_detail, doc.get("cabang", ""))
+        raise HTTPException(500, f"Internal server error: {str(e)}")
 
 
 async def get_request_detail(db, req_id: str) -> RequestSparepartResponse:
