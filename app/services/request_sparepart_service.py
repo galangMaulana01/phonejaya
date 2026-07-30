@@ -165,7 +165,7 @@ async def approve_request(
 ) -> RequestSparepartResponse:
     """
     Kasir final approval:
-    - Status Selesai: set harga_jual, create/update sparepart master, atomic $inc harga_modal unit, insert unit_modal_history
+    - Status Selesai: set harga_jual, create/update sparepart master, atomic $inc harga_modal unit, log via write_log
     - Status Ditolak: set status Ditolak
     Atomic: pakai find_one_and_update dengan filter status=Menunggu_Kasir untuk prevent double approve
     """
