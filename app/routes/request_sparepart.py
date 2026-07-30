@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Request, Query
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.database import get_db
@@ -78,16 +78,15 @@ async def respon_request(
 
 # PATCH /request-sparepart/{req_id}/approve - Kasir final approval
 @router.patch("/{req_id}/approve")
-async def approve_request(
+async def approve_request_sparepart(
     req_id: str,
-    body:   RequestSparepartApproveRequest,
-    db:     AsyncIOMotorDatabase = Depends(get_db),
-    user:   dict = Depends(require_kasir),
+    payload: RequestSparepartApproveRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_any),
 ):
-    item = await approve_request(
-        db, req_id=req_id, payload=body,
-        actor=user.get("name", user.get("username","")),
-        actor_role=user.get("role",""),
-        actor_cabang=user.get("cabang",""),
+    return await approve_request(
+        db, req_id, payload,
+        actor=user.get("username", ""),
+        actor_role=user.get("role", ""),
+        actor_cabang=user.get("cabang", ""),
     )
-    return ok(item.model_dump(), message=f"Request {req_id} {item.status}")
