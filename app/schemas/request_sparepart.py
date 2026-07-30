@@ -17,7 +17,7 @@ class KCResponseStatusEnum(str, Enum):
 
 class RequestSparepartCreateRequest(BaseModel):
     tipe:       str
-    service_id: str  # WAJIB: ID service tiket yang butuh sparepart
+    service_id: Optional[str] = None  # WAJIB untuk request BARU (divalidasi di endpoint), Optional untuk kompatibilitas data lama
     sp_id:      Optional[str] = None
     nama_sp:    str
     jumlah:     int = 1

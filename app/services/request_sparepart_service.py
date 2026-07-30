@@ -57,12 +57,16 @@ async def create_request(
     """
     Teknisi create request sparepart untuk service tertentu.
     Validasi:
-    - service_id wajib exist
+    - service_id WAJIB untuk request baru
     - service status = Proses atau Selesai (sudah dipegang teknisi)
-    - service.teknisi_id == actor (teknisi yang pegang)
+    - service.teknisi == actor (teknisi yang pegang)
     - service.cabang == payload.cabang
     - Kalau sp_id null (beli baru) -> product_link WAJIB
     """
+    # Validasi service_id wajib untuk request baru
+    if not payload.service_id or not payload.service_id.strip():
+        raise HTTPException(status_code=400, detail="Wajib pilih tiket servis yang berkaitan (service_id)")
+
     # Validasi service
     svc = await db.service.find_one({"service_id": payload.service_id})
     if not svc:
@@ -259,20 +263,13 @@ async def approve_request(
                 {"$inc": {"harga_modal": delta}, "$set": {"updated_at": datetime.now(timezone.utc)}}
             )
 
-            # Insert unit_modal_history
-            await db.unit_modal_history.insert_one({
-                "unit_id": unit_id,
-                "sebelum": old_modal,
-                "sesudah": new_modal,
-                "delta": delta,
-                "ref_type": "sparepart_approve",
-                "ref_id": req_id,
-                "actor_id": doc.get("dibuat_oleh") if doc.get("dibuat_oleh") else actor,
-                "actor_name": actor,
-                "actor_role": actor_role,
-                "catatan": f"Sparepart {doc['nama_sp']} x{doc['jumlah']} @ Rp{payload.harga_jual:,}",
-                "timestamp": datetime.now(timezone.utc),
-            })
+            # Log modal history via write_log (known limitation: no rollback on rejection/revision)
+            await write_log(
+                db, actor, "Update Modal Sparepart",
+                f"Unit {unit_id} modal +Rp{delta:,} (dari Rp{old_modal:,} -> Rp{new_modal:,}) via sparepart {doc['nama_sp']} x{doc['jumlah']} @ Rp{payload.harga_jual:,} (ref: {req_id})",
+                doc.get("cabang", "")
+            )
+            # TODO: Rollback logic for rejection/revision not implemented (known limitation)
 
         # Finalize request
         final_update = {
