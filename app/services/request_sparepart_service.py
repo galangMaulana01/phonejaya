@@ -315,8 +315,9 @@ async def approve_request(
         )
         # Log the actual error for debugging
         import traceback
-        error_detail = f"Approve error: {str(e)}\n{traceback.format_exc()}"
-        await write_log(db, actor, "Error Approve Sparepart", error_detail, doc.get("cabang", ""))
+        error_msg = f"Approve error: {str(e)}\n{traceback.format_exc()}"
+        await write_log(db, actor, "Error Approve Sparepart", error_msg, doc.get("cabang", ""))
+        # Re-raise with actual error message for debugging
         raise HTTPException(500, f"Internal server error: {str(e)}")
 
 
