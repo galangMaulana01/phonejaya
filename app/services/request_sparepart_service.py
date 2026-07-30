@@ -247,6 +247,14 @@ async def approve_request(
                         catatan=f"Auto-created from request {req_id}",
                         product_link=doc.get("product_link")
                     ), actor=actor)
+                    sp_id = new_sp.sp_id
+                    # Update request with sp_id
+                    await db.request_sparepart.update_one(
+                        {"req_id": req_id, "status": "processing_approval"},
+                        {"$set": {"sp_id": sp_id}}
+                    )
+                except HTTPException:
+                    raise
                 except Exception as e:
                     # Log the specific error from create_sparepart
                     import traceback
