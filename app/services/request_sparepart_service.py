@@ -169,7 +169,7 @@ async def approve_request(
     - Status Ditolak: set status Ditolak
     Atomic: pakai find_one_and_update dengan filter status=Menunggu_Kasir untuk prevent double approve
     """
-    await write_log(db, actor, "Debug Approve Entry", f"Enter approve_request for req_id={req_id}, actor={actor}, actor_role={actor_role}, actor_cabang={actor_cabang}", "")
+    await write_log(db, actor, "Debug Approve Entry", f"Enter approve_request for req_id={req_id}, actor={actor}, actor_role={actor_role}, actor_cabang={actor_cabang}", actor_cabang)
 
     if actor_role != "kasir":
         raise HTTPException(403, "Hanya Kasir yang bisa melakukan approval akhir")
