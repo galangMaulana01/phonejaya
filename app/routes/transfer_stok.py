@@ -12,7 +12,7 @@ from app.services.transfer_stok_service import (
     count_pending_for_cabang,
     list_pending_for_cabang,
 )
-from app.middlewares.auth import require_kepala_or_owner, require_any, require_kepala_cabang_only
+from app.middlewares.auth import require_kepala_or_owner, require_kepala_cabang_only
 
 router = APIRouter(prefix="/transfer-stok", tags=["Transfer Stok"])
 
@@ -107,7 +107,10 @@ async def list_cabang_for_transfer(
 @router.get("/notif/count")
 async def notif_count(
     db:   AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_any),
+    # Only owner/kepala_cabang actually participate in stock transfers —
+    # require_any let kurir/influencer see a real pending-transfer count for
+    # a workflow they have no role in (BUG-022).
+    user: dict = Depends(require_kepala_or_owner),
 ):
     """
     Jumlah transfer Pending yang ditujukan ke cabang user.

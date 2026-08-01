@@ -9,6 +9,8 @@ from app.schemas.request_sparepart import (
     RequestSparepartApproveRequest, StatusRequestEnum
 )
 from app.services.log_service import write_log
+from app.services.unit_modal_history import create_modal_history
+from app.schemas.unit_modal_history import UnitModalHistoryCreateRequest, ModalHistoryRefType
 from app.utils.formatters import fmt_waktu
 
 
@@ -285,6 +287,20 @@ async def approve_request(
                     f"Unit {unit_id} modal +Rp{delta:,} (dari Rp{old_modal:,} -> Rp{new_modal:,}) via sparepart {doc['nama_sp']} x{doc['jumlah']} @ Rp{payload.harga_jual:,} (ref: {doc['req_id']})",
                     doc.get("cabang", "")
                 )
+                # Also record it in unit_modal_history so GET /units/{id}/modal-history
+                # actually returns data instead of always being empty (BUG-017).
+                await create_modal_history(db, UnitModalHistoryCreateRequest(
+                    unit_id=unit_id,
+                    sebelum=old_modal,
+                    sesudah=new_modal,
+                    delta=delta,
+                    ref_type=ModalHistoryRefType.sparepart_approve,
+                    ref_id=doc["req_id"],
+                    actor_id=actor,
+                    actor_name=actor,
+                    actor_role=actor_role,
+                    catatan=f"{doc['nama_sp']} x{doc['jumlah']} @ Rp{payload.harga_jual:,}",
+                ))
                 # TODO: Rollback logic for rejection/revision not implemented (known limitation)
 
             # Finalize request

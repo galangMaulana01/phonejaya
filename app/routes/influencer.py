@@ -229,8 +229,9 @@ from app.config.settings import settings
 
 async def verify_cron_secret(x_cron_secret: str = Header(...)):
     """Verify cron secret for automated calls."""
+    import hmac
     cron_secret = getattr(settings, "CRON_SECRET", None) or os.getenv("CRON_SECRET")
-    if not cron_secret or x_cron_secret != cron_secret:
+    if not cron_secret or not hmac.compare_digest(x_cron_secret, cron_secret):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid cron secret")
 
 

@@ -227,13 +227,21 @@ async def approve_customer(
         "verified_by_role": actor_role,
     }
 
+    # Atomic claim on the status we just validated against — if a concurrent
+    # approve/reject already moved this customer, this matches 0 docs instead
+    # of both callers writing a duplicate status_history entry (BUG-020).
+    claimed = await db.customers.find_one_and_update(
+        {"_id": ObjectId(customer_id), "status": current_status},
+        {"$set": update},
+    )
+    if not claimed:
+        raise HTTPException(409, "Status customer sudah berubah oleh proses lain, silakan refresh.")
+
     # Add status history
     await _add_status_history(
         db, ObjectId(customer_id), current_status, "Verified",
         actor_id, actor_name, actor_role, ""
     )
-
-    await db.customers.update_one({"_id": ObjectId(customer_id)}, {"$set": update})
 
     updated = await db.customers.find_one({"_id": ObjectId(customer_id)})
 
@@ -272,13 +280,18 @@ async def reject_customer(
         "rejected_reason": reason.strip(),
     }
 
+    claimed = await db.customers.find_one_and_update(
+        {"_id": ObjectId(customer_id), "status": current_status},
+        {"$set": update},
+    )
+    if not claimed:
+        raise HTTPException(409, "Status customer sudah berubah oleh proses lain, silakan refresh.")
+
     # Add status history
     await _add_status_history(
         db, ObjectId(customer_id), current_status, "Rejected",
         actor_id, actor_name, actor_role, reason.strip()
     )
-
-    await db.customers.update_one({"_id": ObjectId(customer_id)}, {"$set": update})
 
     updated = await db.customers.find_one({"_id": ObjectId(customer_id)})
 
@@ -314,14 +327,26 @@ async def resubmit_customer(
         "resubmitted_by_name": actor_name,
         "resubmitted_by_role": actor_role,
     }
+    # Clear the previous rejection's metadata — otherwise it survives a later
+    # approval and CustomerResponse keeps showing a stale rejected_reason
+    # alongside status: Verified (BUG-019).
+    unset_fields = {
+        "rejected_at": "", "rejected_by": "", "rejected_by_name": "",
+        "rejected_by_role": "", "rejected_reason": "",
+    }
+
+    claimed = await db.customers.find_one_and_update(
+        {"_id": ObjectId(customer_id), "status": current_status},
+        {"$set": update, "$unset": unset_fields},
+    )
+    if not claimed:
+        raise HTTPException(409, "Status customer sudah berubah oleh proses lain, silakan refresh.")
 
     # Add status history
     await _add_status_history(
         db, ObjectId(customer_id), current_status, "Pending",
         actor_id, actor_name, actor_role, "Resubmit after rejection"
     )
-
-    await db.customers.update_one({"_id": ObjectId(customer_id)}, {"$set": update})
 
     updated = await db.customers.find_one({"_id": ObjectId(customer_id)})
 
