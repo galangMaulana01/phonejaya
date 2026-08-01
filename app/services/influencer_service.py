@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -20,6 +21,12 @@ from app.services.tiktok_scraper import fetch_video_metrics as fetch_tiktok_metr
 # Instagram: Still using RapidAPI (TODO: migrate to direct scraper)
 from app.services.instagram_service import fetch_post_metrics as fetch_instagram_metrics, InstagramAPIError
 # Facebook support REMOVED - only TikTok and Instagram now
+
+# Overall deadline for the auto-fetch metrics call. The scraper's own HTTP
+# client already timeouts per-request, but a chain of requests (bootstrap +
+# profile + video page) could otherwise add up past Vercel's function limit
+# and hang POST /influencer/videos for 60-90s+ (BUG-015).
+_METRICS_FETCH_TIMEOUT_SECONDS = 20
 
 
 def _fmt_video(doc: dict) -> VideoResponse:
@@ -193,7 +200,10 @@ async def create_video(
     thumbnail_url = ""
     if payload.platform.value == "tiktok":
         try:
-            metrics = await fetch_tiktok_metrics(str(payload.url))
+            metrics = await asyncio.wait_for(
+                fetch_tiktok_metrics(str(payload.url)),
+                timeout=_METRICS_FETCH_TIMEOUT_SECONDS,
+            )
             views = metrics.get("views", 0)
             likes = metrics.get("likes", 0)
             comments = metrics.get("comments", 0)
@@ -213,9 +223,18 @@ async def create_video(
                 f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
                 cabang
             )
+        except asyncio.TimeoutError:
+            await write_log(
+                db, actor, "TikTok Auto-Fetch Failed",
+                f"{video_id} → timed out after {_METRICS_FETCH_TIMEOUT_SECONDS}s",
+                cabang
+            )
     elif payload.platform.value == "instagram":
         try:
-            metrics = await fetch_instagram_metrics(str(payload.url))
+            metrics = await asyncio.wait_for(
+                fetch_instagram_metrics(str(payload.url)),
+                timeout=_METRICS_FETCH_TIMEOUT_SECONDS,
+            )
             views = metrics.get("views", 0)
             likes = metrics.get("likes", 0)
             comments = metrics.get("comments", 0)
@@ -227,6 +246,12 @@ async def create_video(
             await write_log(
                 db, actor, "Instagram Auto-Fetch Failed",
                 f"{video_id} → {e.args[0] if e.args else 'Unknown error'}",
+                cabang
+            )
+        except asyncio.TimeoutError:
+            await write_log(
+                db, actor, "Instagram Auto-Fetch Failed",
+                f"{video_id} → timed out after {_METRICS_FETCH_TIMEOUT_SECONDS}s",
                 cabang
             )
     # Facebook support REMOVED - only TikTok and Instagram now

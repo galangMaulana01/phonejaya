@@ -1,6 +1,7 @@
 from datetime import datetime, timezone, date
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException
 from app.schemas.karyawan import KaryawanCreateRequest, KaryawanResponse
 from app.services.log_service import write_log
@@ -46,7 +47,10 @@ async def create_karyawan(db, payload: KaryawanCreateRequest, actor: str) -> Kar
         "created_at": now,
         "foto_profil_url": payload.foto_profil_url,
     }
-    result = await db.karyawan.insert_one(doc)
+    try:
+        result = await db.karyawan.insert_one(doc)
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail=f"Username '{payload.username}' baru saja digunakan (race condition)")
     doc["_id"] = result.inserted_id
 
     # Buat akun login di users collection
@@ -59,15 +63,21 @@ async def create_karyawan(db, payload: KaryawanCreateRequest, actor: str) -> Kar
         "Influencer": "influencer",
     }
     role = role_map.get(payload.jabatan, "kasir")
-    await db.users.insert_one({
-        "name":       payload.nama,
-        "username":   payload.username,
-        "password_hash":   hash_password(payload.password),
-        "role":       role,
-        "cabang":     payload.cabang,
-        "aktif":      True,
-        "created_at": now,
-    })
+    try:
+        await db.users.insert_one({
+            "name":       payload.nama,
+            "username":   payload.username,
+            "password_hash":   hash_password(payload.password),
+            "role":       role,
+            "cabang":     payload.cabang,
+            "aktif":      True,
+            "created_at": now,
+        })
+    except DuplicateKeyError:
+        # Roll back the karyawan doc so we don't leave an orphan record with
+        # no matching login account.
+        await db.karyawan.delete_one({"_id": result.inserted_id})
+        raise HTTPException(status_code=409, detail=f"Username '{payload.username}' baru saja digunakan (race condition)")
 
     await write_log(db, actor, "Tambah Karyawan",
         f"{payload.nama} ({payload.username}) • {payload.jabatan}", payload.cabang)

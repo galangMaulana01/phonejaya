@@ -301,10 +301,15 @@ async def _proses_terima(
     transfer_id   = doc["transfer_id"]
     unit_updates  = []
 
+    # Pass 1: validate every unit BEFORE mutating any of them. Previously,
+    # validation and mutation happened unit-by-unit in the same loop, so a
+    # later unit failing validation left earlier units already migrated to
+    # the destination cabang with no rollback (see BUG-009). Validating the
+    # whole batch first means a failure here mutates nothing.
+    units_to_migrate = []
     for unit_item in doc.get("units", []):
         unit_id_asal = unit_item["unit_id_asal"]
 
-        # Fetch unit terkini — pastikan masih Tersedia dan cabang masih sama
         unit = await db.units.find_one({"unit_id": unit_id_asal})
         if not unit:
             raise HTTPException(
@@ -322,12 +327,15 @@ async def _proses_terima(
                 detail=f"Unit {unit_id_asal} tidak lagi berada di cabang {cabang_asal}."
             )
 
-        # Generate unit_id baru dengan cabang tujuan
         try:
             kat_kode, kondisi_kode = _parse_kode(unit_id_asal)
         except ValueError as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+        units_to_migrate.append((unit_id_asal, kat_kode, kondisi_kode))
+
+    # Pass 2: all units validated — now actually migrate each one.
+    for unit_id_asal, kat_kode, kondisi_kode in units_to_migrate:
         unit_id_baru = await next_unit_id(db, kat_kode, kondisi_kode, cabang_tujuan)
 
         # Update unit document: reassign ID + cabang, clear soft-lock status to Tersedia

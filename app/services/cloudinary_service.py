@@ -152,6 +152,23 @@ async def get_upload_signature(folder: str = "jayaphone", public_id: Optional[st
     }
 
 
+async def get_resource_uploader(public_id: str) -> Optional[str]:
+    """
+    Look up the `uploaded_by` context value stored on a Cloudinary resource
+    at upload time (see `upload_image`'s `context` param). Used to enforce
+    ownership before allowing a delete. Returns None if the resource doesn't
+    exist or has no recorded uploader (e.g. assets from before this check
+    existed).
+    """
+    try:
+        result = cloudinary.api.resource(public_id, resource_type="image", context=True)
+    except cloudinary.exceptions.NotFound:
+        return None
+    except cloudinary.exceptions.Error as e:
+        raise CloudinaryServiceError(f"Cloudinary resource lookup failed: {str(e)}", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return result.get("context", {}).get("custom", {}).get("uploaded_by")
+
+
 async def get_resource_info(public_id: str) -> Optional[Dict[str, Any]]:
     """
     Get information about a Cloudinary resource.

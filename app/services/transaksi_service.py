@@ -73,170 +73,189 @@ async def create_transaksi(
     sp_total_modal = 0
     sp_items_doc = []
 
-    # ── Process unit (if any) ──
-    if has_unit:
-        # Atomic claim with cabang — prevents cross-branch sale + double-click
-        unit = await db.units.find_one_and_update(
-            {"unit_id": payload.unit_id, "cabang": cabang, "status": "Tersedia"},
-            {"$set": {"status": "Sold", "tgl_terjual": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},
-            return_document=False,
-        )
-        if not unit:
-            existing = await db.units.find_one({"unit_id": payload.unit_id})
-            if not existing:
-                raise HTTPException(status_code=404, detail="Unit tidak ditemukan")
-            if existing.get("cabang") != cabang:
-                raise HTTPException(status_code=403, detail="Unit bukan milik cabang kamu")
-            raise HTTPException(status_code=409, detail=f"Unit tidak tersedia (status: {existing['status']})")
+    # Tracks what's already been mutated in this call so we can compensate if
+    # a later step fails — otherwise a unit can end up "Sold" with no
+    # transaksi record, or sparepart stock can be partially decremented with
+    # nothing to show for it (see BUG-010 / BUG-011). Everything from here
+    # through the final insert_one runs inside one try block so ANY failure
+    # (unit claim, sparepart stock, customer/points validation) triggers the
+    # same rollback.
+    sp_decremented: list = []  # [(sp_id, jumlah), ...]
 
-        # Validate IMEI (after claim, before proceeding)
-        if unit.get("imei") and unit["imei"] != "-":
-            if payload.imei.strip() != unit["imei"]:
-                # Safe rollback: only if still Sold (our claim)
-                await db.units.update_one(
-                    {"_id": unit["_id"], "status": "Sold"},
-                    {"$set": {"status": "Tersedia"}}
-                )
-                raise HTTPException(status_code=422, detail="IMEI tidak sesuai. Periksa kembali.")
-
-        total_jual_unit = unit["harga_jual"] + payload.biaya_garansi
-        total_modal_unit = unit["harga_modal"]
-        unit_label_parts.append(f"{unit['merk']} {unit['tipe']} {unit['storage']}")
-
-    # ── Process spareparts (if any) ──
-    if has_sp:
-        for item in payload.sparepart_items:
-            sp = await db.sparepart.find_one({"sp_id": item.sp_id})
-            if not sp:
-                raise HTTPException(status_code=404, detail=f"Sparepart {item.sp_id} tidak ditemukan")
-            if sp.get("cabang") != cabang:
-                raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
-
-            # Atomic check-and-decrement to prevent race condition
-            result = await db.sparepart.find_one_and_update(
-                {"sp_id": item.sp_id, "stok": {"$gte": item.jumlah}},
-                {"$inc": {"stok": -item.jumlah}, "$set": {"updated_at": datetime.now(timezone.utc)}},
+    try:
+        # ── Process unit (if any) ──
+        if has_unit:
+            # Atomic claim with cabang — prevents cross-branch sale + double-click
+            unit = await db.units.find_one_and_update(
+                {"unit_id": payload.unit_id, "cabang": cabang, "status": "Tersedia"},
+                {"$set": {"status": "Sold", "tgl_terjual": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},
                 return_document=False,
             )
-            if not result:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Stok {sp['nama']} tidak cukup. Tersedia: {sp['stok']}, diminta: {item.jumlah}"
+            if not unit:
+                existing = await db.units.find_one({"unit_id": payload.unit_id})
+                if not existing:
+                    raise HTTPException(status_code=404, detail="Unit tidak ditemukan")
+                if existing.get("cabang") != cabang:
+                    raise HTTPException(status_code=403, detail="Unit bukan milik cabang kamu")
+                raise HTTPException(status_code=409, detail=f"Unit tidak tersedia (status: {existing['status']})")
+
+            # Validate IMEI (after claim, before proceeding)
+            if unit.get("imei") and unit["imei"] != "-":
+                if payload.imei.strip() != unit["imei"]:
+                    raise HTTPException(status_code=422, detail="IMEI tidak sesuai. Periksa kembali.")
+
+            total_jual_unit = unit["harga_jual"] + payload.biaya_garansi
+            total_modal_unit = unit["harga_modal"]
+            unit_label_parts.append(f"{unit['merk']} {unit['tipe']} {unit['storage']}")
+
+        # ── Process spareparts (if any) ──
+        if has_sp:
+            for item in payload.sparepart_items:
+                sp = await db.sparepart.find_one({"sp_id": item.sp_id})
+                if not sp:
+                    raise HTTPException(status_code=404, detail=f"Sparepart {item.sp_id} tidak ditemukan")
+                if sp.get("cabang") != cabang:
+                    raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
+
+                # Atomic check-and-decrement to prevent race condition
+                result = await db.sparepart.find_one_and_update(
+                    {"sp_id": item.sp_id, "stok": {"$gte": item.jumlah}},
+                    {"$inc": {"stok": -item.jumlah}, "$set": {"updated_at": datetime.now(timezone.utc)}},
+                    return_document=False,
                 )
+                if not result:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Stok {sp['nama']} tidak cukup. Tersedia: {sp['stok']}, diminta: {item.jumlah}"
+                    )
+                sp_decremented.append((item.sp_id, item.jumlah))
 
-            sp_jual = sp["harga_jual"] * item.jumlah
-            sp_modal = sp["harga_beli"] * item.jumlah
-            sp_total_jual += sp_jual
-            sp_total_modal += sp_modal
-            sp_labels.append(f"{sp['nama']} x{item.jumlah}")
-            sp_items_doc.append({"sp_id": item.sp_id, "jumlah": item.jumlah, "nama": sp["nama"], "harga": sp["harga_jual"]})
+                sp_jual = sp["harga_jual"] * item.jumlah
+                sp_modal = sp["harga_beli"] * item.jumlah
+                sp_total_jual += sp_jual
+                sp_total_modal += sp_modal
+                sp_labels.append(f"{sp['nama']} x{item.jumlah}")
+                sp_items_doc.append({"sp_id": item.sp_id, "jumlah": item.jumlah, "nama": sp["nama"], "harga": sp["harga_jual"]})
 
-    # ── Calculate totals ──
-    harga_jual_base = total_jual_unit + sp_total_jual
-    harga_modal_total = total_modal_unit + sp_total_modal
-    all_labels = unit_label_parts + sp_labels
-    label_combined = " + ".join(all_labels) if all_labels else "Transaksi"
+        # ── Calculate totals ──
+        harga_jual_base = total_jual_unit + sp_total_jual
+        harga_modal_total = total_modal_unit + sp_total_modal
+        all_labels = unit_label_parts + sp_labels
+        label_combined = " + ".join(all_labels) if all_labels else "Transaksi"
 
-    # ── Guest vs Member logic ──
-    customer_type = payload.customer_type if payload.customer_type in ["member", "guest"] else "member"
-    customer_id = None
-    customer_doc = None
-    poin_dipakai = 0
-    poin_baru = 0
-    harga_jual_final = 0
-
-    if customer_type == "member":
-        # ── Member flow: auto-create/find customer, points, verification ──
-        if payload.customer_nama and payload.customer_nama.strip():
-            customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
-            if customer_doc:
-                customer_id = str(customer_doc["_id"])
-            else:
-                new_customer = await create_customer(db,
-                                __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
-                                    nama=payload.customer_nama.strip(),
-                                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
-                                    cabang=cabang
-                                ),
-                                actor_id=kasir_name,
-                                actor_name=kasir_name,
-                                actor_role="kasir",
-                                cabang=cabang
-                            )
-                customer_id = new_customer.id
-                customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
-
-        # Points logic for member
-        trx_id = await next_trx_id(db)
-        if customer_doc and poin_dipakai > 0:
-            customer_status = customer_doc.get("status", "Pending")
-            if customer_status != "Verified":
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Customer status {customer_status}: hanya customer Verified yang bisa klaim poin"
-                )
-            if poin_dipakai > customer_doc.get("points", 0):
-                raise HTTPException(status_code=400, detail="Poin customer tidak cukup")
-            diskon_poin = poin_dipakai * 1000
-            harga_jual_final = harga_jual_base - diskon_poin
-            if harga_jual_final < 0:
-                raise HTTPException(status_code=400, detail="Poin terlalu banyak, harga tidak boleh negatif")
-        else:
-            harga_jual_final = harga_jual_base
-
-        poin_baru = int(harga_jual_final // 100000)
-
-        if customer_doc:
-            net_poin = -poin_dipakai + poin_baru
-            if net_poin != 0:
-                await db.customers.update_one(
-                    {"_id": customer_doc["_id"]},
-                    {"$inc": {"points": net_poin}}
-                )
-    else:
-        # ── Guest flow: no customer creation, no points, no verification ──
-        customer_type = "guest"
+        # ── Guest vs Member logic ──
+        customer_type = payload.customer_type if payload.customer_type in ["member", "guest"] else "member"
         customer_id = None
         customer_doc = None
         poin_dipakai = 0
-        poin_baru = int(harga_jual_base // 100000)
-        harga_jual_final = harga_jual_base
+        poin_baru = 0
+        harga_jual_final = 0
 
-    profit = harga_jual_final - harga_modal_total
-    now = datetime.now(timezone.utc)
+        if customer_type == "member":
+            # ── Member flow: auto-create/find customer, points, verification ──
+            if payload.customer_nama and payload.customer_nama.strip():
+                customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
+                if customer_doc:
+                    customer_id = str(customer_doc["_id"])
+                else:
+                    new_customer = await create_customer(db,
+                                    __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
+                                        nama=payload.customer_nama.strip(),
+                                        kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
+                                        cabang=cabang
+                                    ),
+                                    actor_id=kasir_name,
+                                    actor_name=kasir_name,
+                                    actor_role="kasir",
+                                    cabang=cabang
+                                )
+                    customer_id = new_customer.id
+                    customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
 
-    # ── Determine tipe ──
-    if has_unit and has_sp:
-        tipe = "gabungan"
-    elif has_unit:
-        tipe = "unit"
-    else:
-        tipe = "sparepart"
+            # Points logic for member
+            if customer_doc and poin_dipakai > 0:
+                customer_status = customer_doc.get("status", "Pending")
+                if customer_status != "Verified":
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Customer status {customer_status}: hanya customer Verified yang bisa klaim poin"
+                    )
+                if poin_dipakai > customer_doc.get("points", 0):
+                    raise HTTPException(status_code=400, detail="Poin customer tidak cukup")
+                diskon_poin = poin_dipakai * 1000
+                harga_jual_final = harga_jual_base - diskon_poin
+                if harga_jual_final < 0:
+                    raise HTTPException(status_code=400, detail="Poin terlalu banyak, harga tidak boleh negatif")
+            else:
+                harga_jual_final = harga_jual_base
 
-    doc = {
-        "trx_id":        await next_trx_id(db),
-        "tipe":          tipe,
-        "unit_id":       payload.unit_id if has_unit else None,
-        "unit_label":    label_combined,
-        "kasir":         kasir_name,
-        "harga_jual":    harga_jual_final,
-        "harga_modal":   harga_modal_total,
-        "profit":        harga_jual_final - harga_modal_total,
-        "garansi_hari":  payload.garansi_hari if has_unit else 0,
-        "biaya_garansi": payload.biaya_garansi if has_unit else 0,
-        "poin_dipakai":  0 if customer_type == "guest" else poin_dipakai,
-        "poin_dapat":    poin_baru,
-        "waktu":         datetime.now(timezone.utc),
-        "catatan":       payload.catatan,
-        "cabang":        cabang,
-        "customer_type": customer_type,
-        "customer_nama":  payload.customer_nama.strip() if payload.customer_nama else "",
-        "customer_kontak": payload.customer_kontak.strip() if payload.customer_kontak else "",
-        "customer_id":    customer_id,
-        "sp_items":      sp_items_doc if has_sp else None,
-        "foto_serah_terima": payload.foto_serah_terima,
-    }
-    result = await db.transaksi.insert_one(doc)
+            poin_baru = int(harga_jual_final // 100000)
+
+            if customer_doc:
+                net_poin = -poin_dipakai + poin_baru
+                if net_poin != 0:
+                    await db.customers.update_one(
+                        {"_id": customer_doc["_id"]},
+                        {"$inc": {"points": net_poin}}
+                    )
+        else:
+            # ── Guest flow: no customer creation, no points, no verification ──
+            customer_type = "guest"
+            customer_id = None
+            customer_doc = None
+            poin_dipakai = 0
+            poin_baru = int(harga_jual_base // 100000)
+            harga_jual_final = harga_jual_base
+
+        # ── Determine tipe ──
+        if has_unit and has_sp:
+            tipe = "gabungan"
+        elif has_unit:
+            tipe = "unit"
+        else:
+            tipe = "sparepart"
+
+        doc = {
+            "trx_id":        await next_trx_id(db),
+            "tipe":          tipe,
+            "unit_id":       payload.unit_id if has_unit else None,
+            "unit_label":    label_combined,
+            "kasir":         kasir_name,
+            "harga_jual":    harga_jual_final,
+            "harga_modal":   harga_modal_total,
+            "profit":        harga_jual_final - harga_modal_total,
+            "garansi_hari":  payload.garansi_hari if has_unit else 0,
+            "biaya_garansi": payload.biaya_garansi if has_unit else 0,
+            "poin_dipakai":  0 if customer_type == "guest" else poin_dipakai,
+            "poin_dapat":    poin_baru,
+            "waktu":         datetime.now(timezone.utc),
+            "catatan":       payload.catatan,
+            "cabang":        cabang,
+            "customer_type": customer_type,
+            "customer_nama":  payload.customer_nama.strip() if payload.customer_nama else "",
+            "customer_kontak": payload.customer_kontak.strip() if payload.customer_kontak else "",
+            "customer_id":    customer_id,
+            "sp_items":      sp_items_doc if has_sp else None,
+            "foto_serah_terima": payload.foto_serah_terima,
+        }
+        result = await db.transaksi.insert_one(doc)
+    except HTTPException:
+        # Compensate whatever was already claimed/decremented before the
+        # failure — the customer-points checks above only ever raise before
+        # any customer document is mutated, so unit + sparepart is the full
+        # set of state that needs reverting here.
+        if unit is not None:
+            await db.units.update_one(
+                {"_id": unit["_id"], "status": "Sold"},
+                {"$set": {"status": "Tersedia"}}
+            )
+        for sp_id, jumlah in sp_decremented:
+            await db.sparepart.update_one(
+                {"sp_id": sp_id},
+                {"$inc": {"stok": jumlah}}
+            )
+        raise
+
     doc["_id"] = result.inserted_id
     await write_log(db, kasir_name, "Input Transaksi", f"{doc['trx_id']} • {label_combined}", cabang)
     return _fmt(doc)

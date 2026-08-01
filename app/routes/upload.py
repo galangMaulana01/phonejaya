@@ -15,7 +15,9 @@ from app.services.cloudinary_service import (
     upload_image,
     CloudinaryServiceError,
     delete_image,
+    get_resource_uploader,
 )
+from app.services.log_service import write_log
 
 router = APIRouter(prefix="/upload", tags=["Upload"])
 
@@ -249,15 +251,28 @@ async def delete_uploaded_image(
 ):
     """
     Delete an uploaded image from Cloudinary.
-    
+
     Args:
         public_id: Cloudinary public_id of the image to delete
-    
+
     Returns:
         Deletion result
     """
+    user_name = user.get("name") or user.get("username", "")
+    if user.get("role") != "owner":
+        uploaded_by = await get_resource_uploader(public_id)
+        # Fail closed: if we can't determine who uploaded it (legacy asset
+        # from before this check existed, or already-deleted resource), a
+        # non-owner cannot delete it. Only the original uploader or an owner
+        # may delete an image (BUG-016).
+        if uploaded_by != user_name:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Kamu tidak memiliki hak untuk menghapus gambar ini",
+            )
     try:
         result = await delete_image(public_id)
+        await write_log(db, user_name, "Delete Image", public_id, user.get("cabang", ""))
         return ok(result, message="Image deleted successfully")
     except CloudinaryServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)

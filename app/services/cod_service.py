@@ -266,8 +266,28 @@ async def update_cod_status(
     
     if new_status not in flow.get(current, []):
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Transisi status dari '{current}' ke '{new_status}' tidak diizinkan untuk tipe {doc['type']}"
+        )
+
+    # After meeting the seller, a beli-COD rejection must go through
+    # reject_beli_by_kurir (mandatory `reason`) instead of this generic path,
+    # which only takes an optional `note` — otherwise a kurir can skip the
+    # required rejection reason (BUG-012).
+    if doc["type"] == "beli" and current == "sudah_bertemu_penjual" and new_status == "ditolak":
+        raise HTTPException(
+            status_code=400,
+            detail="Gunakan endpoint reject-beli (wajib menyertakan alasan) untuk menolak COD setelah bertemu penjual."
+        )
+
+    # input_stok → menunggu_approval_kasir must go through submit-beli, which
+    # writes deal_price/unit_data. The generic endpoint has no fields for
+    # those, so taking this path here would silently default deal_price to 0
+    # on approval with no way to correct it (BUG-014).
+    if doc["type"] == "beli" and current == "input_stok" and new_status == "menunggu_approval_kasir":
+        raise HTTPException(
+            status_code=400,
+            detail="Gunakan endpoint submit-beli (wajib menyertakan deal_price dan unit_data) untuk melanjutkan COD ini."
         )
     
     # Atomic update with status filter to prevent race
@@ -778,18 +798,24 @@ async def get_kurir_monitoring(
             "total_cod": {"$sum": 1},
             "cod_beli": {"$sum": {"$cond": [{"$eq": ["$type", "beli"]}, 1, 0]}},
             "cod_jual": {"$sum": {"$cond": [{"$eq": ["$type", "jual"]}, 1, 0]}},
+            "cod_delivery": {"$sum": {"$cond": [{"$eq": ["$type", "delivery"]}, 1, 0]}},
             "status_menunggu": {"$sum": {"$cond": [{"$eq": ["$status", "menunggu_kurir"]}, 1, 0]}},
             "status_diterima": {"$sum": {"$cond": [{"$eq": ["$status", "diterima"]}, 1, 0]}},
             "status_proses": {
                 "$sum": {
                     "$cond": [
-                        {"$in": ["$status", ["diterima", "kurir_menuju_lokasi", "sudah_bertemu_penjual", "barang_akan_dijemput", "barang_sudah_diambil", "kurir_sedang_transaksi"]]},
+                        {"$in": ["$status", [
+                            "diterima", "kurir_menuju_lokasi", "sudah_bertemu_penjual",
+                            "barang_akan_dijemput", "barang_sudah_diambil", "kurir_sedang_transaksi",
+                            "kurir_menuju_toko", "sedang_diantar",
+                        ]]},
                         1, 0
                     ]
                 }
             },
             "status_selesai": {"$sum": {"$cond": [{"$eq": ["$status", "selesai"]}, 1, 0]}},
             "status_transaksi_berhasil": {"$sum": {"$cond": [{"$eq": ["$status", "transaksi_berhasil"]}, 1, 0]}},
+            "status_terkirim": {"$sum": {"$cond": [{"$eq": ["$status", "terkirim"]}, 1, 0]}},
             "status_gagal": {"$sum": {"$cond": [{"$eq": ["$status", "gagal"]}, 1, 0]}},
             "status_ditolak": {"$sum": {"$cond": [{"$eq": ["$status", "ditolak"]}, 1, 0]}},
             "total_offer_price": {"$sum": {"$cond": [{"$eq": ["$type", "beli"]}, "$offer_price", 0]}},
@@ -807,10 +833,10 @@ async def get_kurir_monitoring(
     formatted = []
     for r in results:
         # Calculate success rate
-        total_done = r.get("status_selesai", 0) + r.get("status_transaksi_berhasil", 0)
+        total_done = r.get("status_selesai", 0) + r.get("status_transaksi_berhasil", 0) + r.get("status_terkirim", 0)
         total_assigned = r.get("total_cod", 0) - r.get("status_menunggu", 0) - r.get("status_ditolak", 0)
         success_rate = round((total_done / total_assigned * 100), 1) if total_assigned > 0 else 0
-        
+
         formatted.append({
             "kurir_id": r["_id"],
             "kurir_name": r.get("kurir_name", r["_id"]),
@@ -818,11 +844,13 @@ async def get_kurir_monitoring(
             "total_cod": r.get("total_cod", 0),
             "cod_beli": r.get("cod_beli", 0),
             "cod_jual": r.get("cod_jual", 0),
+            "cod_delivery": r.get("cod_delivery", 0),
             "status_menunggu": r.get("status_menunggu", 0),
             "status_diterima": r.get("status_diterima", 0),
             "status_proses": r.get("status_proses", 0),
             "status_selesai": r.get("status_selesai", 0),
             "status_transaksi_berhasil": r.get("status_transaksi_berhasil", 0),
+            "status_terkirim": r.get("status_terkirim", 0),
             "status_gagal": r.get("status_gagal", 0),
             "status_ditolak": r.get("status_ditolak", 0),
             "success_rate": success_rate,
