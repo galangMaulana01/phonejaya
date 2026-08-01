@@ -63,9 +63,15 @@ check would meaningfully add confidence, it's noted as `NEEDS LIVE VERIFICATION`
 
 ## What this file does NOT cover
 
-Everything listed in `BUG.md` is explicitly **not** confirmed safe — treat those as open findings.
+All 22 findings in `BUG.md` have since been fixed in code (commits `ea563e9`, `21f616b`, `c574a85`
+on this branch) — but none of those fixes have been exercised against the live deployment, since
+network access to `phonejaya.vercel.app` was blocked for this whole session. Don't move a `BUG.md`
+entry's claim into this file until it's actually been hit live and confirmed; "fixed in code" and
+"confirmed safe" are not the same status yet.
+
 A few areas were audited only for the specific concerns listed in `BUG.md` and may have other
 untouched surface (e.g. full Cloudinary upload-side validation, full schema-level input validation
 across all 22 route files, and any logic reachable only from the frontend's specific request shapes).
 Re-run a live check against the 6 test accounts once network access is available — start with
-BUG-006 (COD "jual"/kurir dropdown), which should reproduce deterministically on the first request.
+BUG-006 (COD "jual"/kurir dropdown), which should reproduce-then-resolve deterministically on the
+first request.
