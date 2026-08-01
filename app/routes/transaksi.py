@@ -50,6 +50,8 @@ async def transaksi_detail(
     doc = await db.transaksi.find_one({"trx_id": trx_id})
     if not doc:
         raise HTTPException(status_code=404, detail=f"Transaksi {trx_id} tidak ditemukan")
+    if user.get("role") != "owner" and doc.get("cabang") != user.get("cabang"):
+        raise HTTPException(status_code=403, detail="Bukan hak anda untuk melihat transaksi ini")
     trx = transaksi_service._fmt(doc)
     data = trx.model_dump()
     # Calculate margin percentage

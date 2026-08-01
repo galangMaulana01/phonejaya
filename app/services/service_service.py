@@ -121,10 +121,22 @@ async def update_service(
                        f"Transisi yang diizinkan: {allowed if allowed else 'tidak ada'}"
             )
 
-        updates["status"] = new_status
-
         if new_status == "Proses" and not payload.estimasi_selesai:
             raise HTTPException(status_code=422, detail="Estimasi selesai wajib diisi saat mengubah status ke Proses")
+
+        # Atomic claim on the transition: only one concurrent request can move
+        # this ticket out of `current_status`. The loser gets a 409 instead of
+        # both proceeding to decrement sparepart stock for the same repair.
+        claimed = await db.service.find_one_and_update(
+            {"service_id": service_id, "status": current_status},
+            {"$set": {"status": new_status, "updated_at": updates["updated_at"]}},
+        )
+        if not claimed:
+            raise HTTPException(
+                status_code=409,
+                detail="Status service sudah berubah oleh proses lain, silakan refresh.",
+            )
+        updates["status"] = new_status
 
         # Kalau Ditolak → update unit kembali ke status khusus
         if new_status == "Ditolak":

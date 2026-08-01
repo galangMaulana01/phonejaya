@@ -1,10 +1,17 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from bson import ObjectId
+from bson.errors import InvalidId
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.utils.security import decode_token
+from app.config.database import get_db
 
 security = HTTPBearer()
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+) -> dict:
     token = credentials.credentials
     payload = decode_token(token)
     if not payload:
@@ -13,6 +20,24 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
     if not payload.get("aktif", True):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun nonaktif")
+
+    # Re-check current status in DB instead of trusting the JWT's baked-in "aktif"
+    # claim — otherwise a fired/deactivated user's existing token keeps working
+    # until it naturally expires (up to JWT_EXPIRE_MINUTES).
+    try:
+        oid = ObjectId(payload.get("sub"))
+    except (InvalidId, TypeError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token tidak valid")
+    user = await db.users.find_one({"_id": oid}, {"aktif": 1, "role": 1, "cabang": 1})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Akun tidak ditemukan")
+    if not user.get("aktif", True):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akun nonaktif")
+
+    # Keep role/cabang in sync with the DB too, in case they changed after the
+    # token was issued (e.g. reassigned to a different cabang).
+    payload["role"] = user.get("role", payload.get("role"))
+    payload["cabang"] = user.get("cabang", payload.get("cabang"))
     return payload
 
 

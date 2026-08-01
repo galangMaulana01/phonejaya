@@ -81,7 +81,7 @@ async def create_cod_request(
             raise HTTPException(status_code=422, detail="kurir_id wajib untuk type jual")
         kurir = await db.users.find_one({
             "username": payload.kurir_id,
-            "role": "Kurir",
+            "role": "kurir",
             "cabang": cabang,
             "aktif": True
         })
@@ -405,7 +405,7 @@ async def get_cod_detail(
 
 async def get_kurir_list(db: AsyncIOMotorDatabase, cabang: str) -> List[KurirListItem]:
     """List kurir aktif di cabang."""
-    cursor = db.users.find({"role": "Kurir", "cabang": cabang, "aktif": True})
+    cursor = db.users.find({"role": "kurir", "cabang": cabang, "aktif": True})
     kurirs = await cursor.to_list(length=None)
     return [KurirListItem(kurir_id=k["username"], kurir_name=k.get("name", k["username"]), cabang=k["cabang"]) for k in kurirs]
 

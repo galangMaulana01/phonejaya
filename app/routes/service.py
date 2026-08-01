@@ -47,10 +47,13 @@ async def pending_approval(
 @router.get("/{service_id}")
 async def get_service(
     service_id: str,
-    db:    AsyncIOMotorDatabase = Depends(get_db),
-    _user: dict = Depends(require_any),
+    db:   AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_any),
 ):
     item = await service_service.get_service(db, service_id)
+    if user.get("role") != "owner" and item.cabang != user.get("cabang"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Bukan hak anda untuk melihat service ini")
     return ok(item.model_dump())
 
 
@@ -85,6 +88,8 @@ async def service_detail(
     doc = await db.service.find_one({"service_id": service_id})
     if not doc:
         raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
+    if user.get("role") != "owner" and doc.get("cabang") != user.get("cabang"):
+        raise HTTPException(status_code=403, detail="Bukan hak anda untuk melihat service ini")
     item = service_service._fmt(doc)
     data = item.model_dump()
     # Add timeline from status history if available

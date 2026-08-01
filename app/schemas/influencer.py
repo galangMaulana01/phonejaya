@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator, HttpUrl
+from pydantic import BaseModel, field_validator, HttpUrl, ValidationInfo
 from typing import Optional, List
 from enum import Enum
 from datetime import datetime
@@ -10,6 +10,25 @@ class PlatformEnum(str, Enum):
     # Facebook support REMOVED - only TikTok and Instagram now
     # facebook = "facebook"  # DEPRECATED
     youtube = "youtube"
+
+
+# Allowed hosts per platform — prevents SSRF via a caller-supplied URL that
+# claims platform="tiktok" but actually points at an internal/arbitrary host.
+_ALLOWED_HOSTS = {
+    PlatformEnum.tiktok: ("tiktok.com",),
+    PlatformEnum.instagram: ("instagram.com",),
+    PlatformEnum.youtube: ("youtube.com", "youtu.be"),
+}
+
+
+def _host_allowed(host: Optional[str], platform: "PlatformEnum") -> bool:
+    if not host:
+        return False
+    host = host.lower()
+    for domain in _ALLOWED_HOSTS.get(platform, ()):
+        if host == domain or host.endswith("." + domain):
+            return True
+    return False
 
 
 class VideoCreateRequest(BaseModel):
@@ -27,7 +46,11 @@ class VideoCreateRequest(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def url_to_str(cls, v: HttpUrl) -> str:
+    def url_to_str(cls, v: HttpUrl, info: ValidationInfo) -> str:
+        platform = info.data.get("platform")
+        if platform is not None and not _host_allowed(v.host, platform):
+            allowed = ", ".join(_ALLOWED_HOSTS.get(platform, ()))
+            raise ValueError(f"URL harus dari domain {allowed} untuk platform '{platform.value}'")
         return str(v)
 
 
@@ -36,6 +59,15 @@ class VideoCreateFetchRequest(BaseModel):
     platform: PlatformEnum
     url: HttpUrl
     product_id: Optional[str] = None  # DEPRECATED - kept for backward compat, not used by backend logic
+
+    @field_validator("url")
+    @classmethod
+    def url_matches_platform(cls, v: HttpUrl, info: ValidationInfo) -> HttpUrl:
+        platform = info.data.get("platform")
+        if platform is not None and not _host_allowed(v.host, platform):
+            allowed = ", ".join(_ALLOWED_HOSTS.get(platform, ()))
+            raise ValueError(f"URL harus dari domain {allowed} untuk platform '{platform.value}'")
+        return v
 
 
 class VideoResponse(BaseModel):

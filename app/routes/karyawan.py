@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
@@ -37,6 +37,11 @@ async def tambah_karyawan(
 ):
     if user.get('role') == 'kepala_cabang':
         body.cabang = user.get('cabang', body.cabang)
+        if body.jabatan in ("Owner", "Admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Kepala cabang tidak dapat membuat akun dengan jabatan Owner/Admin",
+            )
     kar = await karyawan_service.create_karyawan(
         db, payload=body,
         actor=user.get("name", user.get("username", "")),
