@@ -10,7 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.database import get_db
 from app.config.settings import settings
 from app.schemas.common import ok
-from app.middlewares.auth import require_any
+from app.middlewares.auth import require_any, require_owner
 from app.services.cloudinary_service import (
     upload_image,
     CloudinaryServiceError,
@@ -87,7 +87,7 @@ async def upload_single_image(
         )
     
     # Determine folder
-    target_folder = folder or FOLDER_MAP.get(upload_type, FOLDER_MAP["general"])
+    target_folder = FOLDER_MAP.get(upload_type, FOLDER_MAP["general"])
     
     # Parse tags
     tag_list = None
@@ -190,7 +190,7 @@ async def upload_multiple_images(
         contents.append((file.filename, file.content_type, content))
     
     # Determine folder
-    target_folder = folder or FOLDER_MAP.get(upload_type, FOLDER_MAP["general"])
+    target_folder = FOLDER_MAP.get(upload_type, FOLDER_MAP["general"])
     
     # Parse tags
     tag_list = None
@@ -245,7 +245,7 @@ async def upload_multiple_images(
 async def delete_uploaded_image(
     public_id: str = Form(...),
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_any),
+    user: dict = Depends(require_owner),
 ):
     """
     Delete an uploaded image from Cloudinary.
@@ -270,10 +270,8 @@ async def delete_uploaded_image(
 
 @router.get("/signature", response_model=dict)
 async def get_upload_signature(
-    folder: str = "jayaphone/general",
-    public_id: Optional[str] = None,
-    timestamp: Optional[int] = None,
-    user: dict = Depends(require_any),
+    upload_type: str = "general",
+    user: dict = Depends(require_owner),
 ):
     """
     Get a signed upload signature for direct frontend uploads (if needed).
@@ -292,16 +290,13 @@ async def get_upload_signature(
     import cloudinary.utils
     import time
     
-    if timestamp is None:
-        timestamp = int(time.time())
+    timestamp = int(time.time())
+    folder = FOLDER_MAP.get(upload_type, FOLDER_MAP["general"])
     
     params = {
         "folder": folder,
         "timestamp": timestamp,
     }
-    
-    if public_id:
-        params["public_id"] = public_id
     
     signature = cloudinary.utils.api_sign_request(params, settings.CLOUDINARY_API_SECRET)
     

@@ -62,8 +62,11 @@ async def list_service(
     return [_fmt(d) for d in docs]
 
 
-async def get_service(db, service_id: str) -> ServiceResponse:
-    doc = await db.service.find_one({"service_id": service_id})
+async def get_service(db, service_id: str, cabang: Optional[str] = None) -> ServiceResponse:
+    query = {"service_id": service_id}
+    if cabang:
+        query["cabang"] = cabang
+    doc = await db.service.find_one(query)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
     return _fmt(doc)

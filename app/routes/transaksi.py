@@ -47,7 +47,10 @@ async def transaksi_detail(
 ):
     """Return transaction with financial breakdown (harga_modal, harga_jual, profit, margin)."""
     from fastapi import HTTPException
-    doc = await db.transaksi.find_one({"trx_id": trx_id})
+    query = {"trx_id": trx_id}
+    if user.get("role") != "owner":
+        query["cabang"] = user.get("cabang")
+    doc = await db.transaksi.find_one(query)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Transaksi {trx_id} tidak ditemukan")
     trx = transaksi_service._fmt(doc)

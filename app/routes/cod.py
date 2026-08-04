@@ -81,7 +81,8 @@ async def get_cod_detail(
     user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     """Detail COD request."""
-    cod = await cod_service.get_cod_detail(db, cod_id)
+    cabang = None if user.get("role") == "owner" else user.get("cabang")
+    cod = await cod_service.get_cod_detail(db, cod_id, cabang=cabang)
     return ok(cod.model_dump())
 
 

@@ -7,7 +7,7 @@ from app.config.database import get_db
 from app.schemas.service import ServiceUpdateRequest
 from app.schemas.common import ok
 from app.services import service_service
-from app.middlewares.auth import require_teknisi_or_owner, require_any, require_kasir_teknisi_or_owner, require_kepala_or_owner
+from app.middlewares.auth import require_teknisi_or_owner, require_kasir_teknisi_or_owner, require_kepala_or_owner
 
 router = APIRouter(prefix="/service", tags=["Service"])
 
@@ -26,7 +26,7 @@ async def list_service(
     date_to:   Optional[str] = Query(None),
     limit:  int = Query(100, ge=1, le=500),
     db:     AsyncIOMotorDatabase = Depends(get_db),
-    user:   dict = Depends(require_any),
+    user:   dict = Depends(require_kasir_teknisi_or_owner),
 ):
     cab = _cabang_filter(user, cabang)
     items = await service_service.list_service(db, cabang=cab, status=status, date_from=date_from, date_to=date_to, limit=limit)
@@ -48,9 +48,10 @@ async def pending_approval(
 async def get_service(
     service_id: str,
     db:    AsyncIOMotorDatabase = Depends(get_db),
-    _user: dict = Depends(require_any),
+    user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
-    item = await service_service.get_service(db, service_id)
+    cabang = _cabang_filter(user, None)
+    item = await service_service.get_service(db, service_id, cabang=cabang)
     return ok(item.model_dump())
 
 
@@ -78,11 +79,15 @@ async def update_service(
 async def service_detail(
     service_id: str,
     db:    AsyncIOMotorDatabase = Depends(get_db),
-    user:  dict = Depends(require_any),
+    user:  dict = Depends(require_kasir_teknisi_or_owner),
 ):
     """Return service with before/after photos and timeline."""
     from fastapi import HTTPException
-    doc = await db.service.find_one({"service_id": service_id})
+    query = {"service_id": service_id}
+    cabang = _cabang_filter(user, None)
+    if cabang:
+        query["cabang"] = cabang
+    doc = await db.service.find_one(query)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
     item = service_service._fmt(doc)

@@ -370,11 +370,15 @@ async def list_cod_requests_all(
 
 async def get_cod_detail(
     db: AsyncIOMotorDatabase,
-    cod_id: str
+    cod_id: str,
+    cabang: Optional[str] = None,
 ) -> CODRequestDetail:
     """Get detail COD request."""
-    
-    doc = await db.cod_requests.find_one({"cod_id": cod_id})
+
+    query = {"cod_id": cod_id}
+    if cabang:
+        query["cabang"] = cabang
+    doc = await db.cod_requests.find_one(query)
     if not doc:
         raise HTTPException(status_code=404, detail="COD Request tidak ditemukan")
     
