@@ -241,7 +241,7 @@ async def update_cod_status(
         )
         if result:
             await write_log(
-                db, actor, "Accept COD (broadcast)",
+                db, actor_name, "Accept COD (broadcast)",
                 f"{cod_id} → diterima oleh {actor_name}",
                 result.get("cabang", "")
             )
@@ -322,7 +322,7 @@ async def update_cod_status(
     doc = await db.cod_requests.find_one({"cod_id": cod_id})
     
     await write_log(
-        db, actor, "Update COD Status",
+        db, actor_name, "Update COD Status",
         f"{cod_id} → {current} → {new_status}" + (f" ({note})" if note else ""),
         doc["cabang"]
     )

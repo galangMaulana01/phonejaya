@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, Header, status
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
 
 from app.config.database import get_db
@@ -118,7 +118,9 @@ async def list_log(
     if date_from and date_to:
         try:
             df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            # date_to is a bare YYYY-MM-DD — push to the start of the next day so
+            # today's entries aren't excluded by a midnight-of-today $lte.
+            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00")) + timedelta(days=1)
             query["waktu"] = {"$gte": df, "$lte": dt}
         except ValueError:
             pass

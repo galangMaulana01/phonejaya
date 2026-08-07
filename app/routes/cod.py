@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.config.database import get_db
 from app.schemas.cod import (
@@ -323,18 +323,27 @@ async def kurir_log(
 ):
     """Log aktivitas Kurir."""
     kurir_id = user.get("sub") or user.get("username")
+    # write_log's "user" field stores the actor's display name everywhere in
+    # this app (see cabang_service/karyawan_service/transaksi_service) — the
+    # kurir-specific COD status/accept/reject/submit log entries follow the
+    # same convention, so this must filter by name too, not the Mongo _id.
+    kurir_name = user.get("name") or user.get("username")
     cabang = user.get("cabang")
-    
+
     if not kurir_id or not cabang:
         raise HTTPException(status_code=400, detail="Data kurir tidak lengkap")
-    
-    query = {"cabang": cabang, "user": kurir_id}
+
+    query = {"cabang": cabang, "user": kurir_name}
     if date_from or date_to:
         wf = {}
         if date_from:
             wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
         if date_to:
-            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
+            # date_to from the frontend is a bare YYYY-MM-DD (no time) — parsing it
+            # straight gives midnight *start* of that day, which then excludes every
+            # same-day entry from $lte. Push to the start of the next day instead,
+            # matching every other date_to comparison in this codebase.
+            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
         query["waktu"] = wf
     if action:
         query["aksi"] = {"$regex": action, "$options": "i"}
