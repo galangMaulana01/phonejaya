@@ -198,7 +198,8 @@ async def update_cod_status(
     new_status: str,
     actor: str,
     actor_name: str,
-    note: Optional[str] = None
+    note: Optional[str] = None,
+    foto_urls: Optional[List[str]] = None
 ) -> CODRequestResponse:
     """Update status COD. Two paths:
     1. Delivery broadcast accept: atomic claim (kurir_id was None, now assigned)
@@ -289,7 +290,15 @@ async def update_cod_status(
             status_code=400,
             detail="Gunakan endpoint submit-beli (wajib menyertakan deal_price dan unit_data) untuk melanjutkan COD ini."
         )
-    
+
+    # Delivery proof-of-handover: kurir must attach a photo of the unit and a
+    # photo with the customer before a delivery can be marked complete.
+    if doc["type"] == "delivery" and new_status == "terkirim" and (not foto_urls or len(foto_urls) < 2):
+        raise HTTPException(
+            status_code=400,
+            detail="Foto bukti serah terima (unit dan bersama customer) wajib diupload sebelum menandai Terkirim."
+        )
+
     # Atomic update with status filter to prevent race
     update_result = await db.cod_requests.find_one_and_update(
         {"cod_id": cod_id, "status": current},
@@ -302,7 +311,8 @@ async def update_cod_status(
                 "by": actor,
                 "by_name": actor_name,
                 "at": now,
-                "note": note
+                "note": note,
+                "foto_urls": foto_urls
             }
         }}
     )

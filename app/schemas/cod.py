@@ -60,6 +60,10 @@ class CODStatusUpdate(BaseModel):
         "menunggu_approval_kasir"
     ]
     note: Optional[str] = None
+    # Delivery proof-of-handover — required when transitioning a type=delivery
+    # COD to "terkirim" (see update_cod_status): photo of the unit handed over
+    # + photo with the customer, enforced server-side, not just in the UI.
+    foto_urls: Optional[List[str]] = None
 
 
 class CODKurirSubmitBeli(BaseModel):
