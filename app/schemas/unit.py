@@ -78,6 +78,12 @@ class UnitCreateRequest(BaseModel):
         if v and v != "-" and not re.match(r'^\d{14,16}$', v):
             raise ValueError("IMEI harus 14-16 digit angka")
         return v
+    @field_validator("harga_modal", "harga_jual")
+    @classmethod
+    def non_negative_price(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Harga tidak boleh negatif")
+        return v
 
 
 

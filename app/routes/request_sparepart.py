@@ -55,7 +55,7 @@ async def buat_request(
         raise HTTPException(403, "Hanya Teknisi yang bisa membuat request sparepart. Gunakan menu Approval Sparepart untuk Kasir/Kepala Cabang.")
 
     body.cabang = user.get("cabang", body.cabang)
-    item = await create_request(db, payload=body, actor=user.get("name", user.get("username","")), actor_id=user.get("sub", ""))
+    item = await create_request(db, payload=body, actor=user.get("name", user.get("username","")))
     return ok(item.model_dump(), message=f"{item.req_id} berhasil diajukan")
 
 
@@ -84,9 +84,10 @@ async def approve_request_sparepart(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_any),
 ):
-    return await approve_request(
+    item = await approve_request(
         db, req_id, payload,
-        actor=user.get("username", ""),
+        actor=user.get("name", user.get("username", "")),
         actor_role=user.get("role", ""),
         actor_cabang=user.get("cabang", ""),
     )
+    return ok(item.model_dump(), message=f"Request {req_id} {item.status}")

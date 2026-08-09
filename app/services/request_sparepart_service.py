@@ -54,7 +54,7 @@ async def list_requests(db, cabang=None, status=None) -> List[RequestSparepartRe
 
 
 async def create_request(
-    db, payload: RequestSparepartCreateRequest, actor: str, actor_id: str
+    db, payload: RequestSparepartCreateRequest, actor: str
 ) -> RequestSparepartResponse:
     """
     Teknisi create request sparepart untuk service tertentu.
@@ -127,7 +127,7 @@ async def create_request(
     res = await db.request_sparepart.insert_one(doc)
     doc["_id"] = res.inserted_id
 
-    await write_log(db, actor_id, "Request Sparepart", f"{req_id} • {payload.nama_sp} x{payload.jumlah} (Service: {payload.service_id})", payload.cabang)
+    await write_log(db, actor, "Request Sparepart", f"{req_id} • {payload.nama_sp} x{payload.jumlah} (Service: {payload.service_id})", payload.cabang)
     return _fmt(doc)
 
 
@@ -171,8 +171,6 @@ async def approve_request(
     - Status Ditolak: set status Ditolak
     Atomic: pakai find_one_and_update dengan filter status=Menunggu_Kasir untuk prevent double approve
     """
-    await write_log(db, actor, "Debug Approve Entry", f"Enter approve_request for req_id={req_id}, actor={actor}, actor_role={actor_role}, actor_cabang={actor_cabang}", actor_cabang)
-
     if actor_role != "kasir":
         raise HTTPException(403, "Hanya Kasir yang bisa melakukan approval akhir")
 
@@ -240,8 +238,6 @@ async def approve_request(
                 from app.schemas.sparepart import SparepartCreateRequest
 
                 try:
-                    await write_log(db, actor, "Debug Approve", f"About to call create_sparepart for req_id={doc['req_id']}, nama_sp={doc['nama_sp']}, jumlah={doc['jumlah']}, harga_jual={payload.harga_jual}, cabang={doc['cabang']}, product_link={doc.get('product_link')}", doc.get("cabang", ""))
-                    
                     new_sp = await create_sparepart(db, SparepartCreateRequest(
                         nama=doc["nama_sp"],
                         kategori="Sparepart",
@@ -253,8 +249,6 @@ async def approve_request(
                         catatan=f"Auto-created from request {doc['req_id']}",
                         product_link=doc.get("product_link")
                     ), actor=actor)
-                    
-                    await write_log(db, actor, "Debug Approve", f"create_sparepart succeeded, new_sp.sp_id={new_sp.sp_id}", doc.get("cabang", ""))
                 except HTTPException:
                     raise
                 except Exception as e:

@@ -3,6 +3,7 @@ from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from datetime import datetime, timezone, timedelta
 import os
+import re
 
 from app.config.database import get_db
 from app.schemas.influencer import (
@@ -127,11 +128,11 @@ async def list_log(
     
     # Platform filter (regex match on aksi field since log doesn't have platform field yet)
     if platform:
-        query["aksi"] = {"$regex": platform, "$options": "i"}
-    
+        query["aksi"] = {"$regex": re.escape(platform), "$options": "i"}
+
     # Get logs, limit 100
     logs = await db.log.find(query).sort("waktu", -1).limit(100).to_list(None)
-    
+
     # Format response
     result = []
     for doc in logs:
@@ -139,13 +140,14 @@ async def list_log(
         aksi = doc.get("aksi", "")
         if any(x in aksi for x in ["Video", "Influencer", "TikTok", "Instagram", "Auto-Fetch", "Sync", "Upload"]):
             result.append({
+                "id": str(doc.get("_id", "")),
                 "waktu": doc.get("waktu", "").isoformat() if isinstance(doc.get("waktu"), datetime) else str(doc.get("waktu", "")),
                 "user": doc.get("user", ""),
                 "aksi": aksi,
                 "detail": doc.get("detail", ""),
                 "cabang": doc.get("cabang", ""),
             })
-    
+
     return ok(result)
 
 

@@ -13,6 +13,8 @@ class CabangCreateRequest(BaseModel):
     def not_empty(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Tidak boleh kosong")
+        if len(v.strip()) > 100:
+            raise ValueError("Maksimal 100 karakter")
         return v.strip().upper() if len(v.strip()) <= 5 else v.strip()
 
     @field_validator("kode")
@@ -26,6 +28,13 @@ class CabangUpdateRequest(BaseModel):
     alamat: Optional[str] = None
     telp:   Optional[str] = None
     aktif:  Optional[bool] = None
+
+    @field_validator("nama")
+    @classmethod
+    def nama_length(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and len(v.strip()) > 100:
+            raise ValueError("Maksimal 100 karakter")
+        return v
 
 
 class AssignKepalaCabangRequest(BaseModel):

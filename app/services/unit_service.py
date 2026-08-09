@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional, List
+import re
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 
@@ -122,7 +123,7 @@ async def list_units(
     if status_filter and status_filter != "Semua":
         query["status"] = status_filter
     if q:
-        regex = {"$regex": q, "$options": "i"}
+        regex = {"$regex": re.escape(q), "$options": "i"}
         query["$or"] = [
             {"merk": regex},
             {"tipe": regex},
@@ -289,10 +290,18 @@ async def approve_repair(
     if service_id:
         svc = await db.service.find_one({"service_id": service_id})
         if svc and svc.get("status") not in ("Selesai", "Approved"):
-            # Rollback unit status back to Service
+            # Rollback unit status back to Service — must also undo the
+            # harga_jual/approved_by/approved_at the atomic update above
+            # already applied, otherwise a rejected approval leaves a stale
+            # price/approver stamped on a unit that's still mid-repair (see
+            # audit finding). A Repair-condition unit has harga_jual=0 until
+            # a real approval succeeds, so 0 is the correct rollback value.
             await db.units.update_one(
                 {"_id": unit["_id"], "status": "Tersedia"},
-                {"$set": {"status": "Service", "updated_at": datetime.now(timezone.utc)}}
+                {
+                    "$set": {"status": "Service", "harga_jual": 0, "updated_at": datetime.now(timezone.utc)},
+                    "$unset": {"approved_by": "", "approved_at": ""},
+                }
             )
             raise HTTPException(
                 status_code=400,

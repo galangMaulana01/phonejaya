@@ -17,7 +17,16 @@ class KaryawanCreateRequest(BaseModel):
     def not_empty(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Nama tidak boleh kosong")
+        if len(v.strip()) > 100:
+            raise ValueError("Nama maksimal 100 karakter")
         return v.strip()
+
+    @field_validator("gaji")
+    @classmethod
+    def gaji_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Gaji tidak boleh negatif")
+        return v
 
     @field_validator("jabatan")
     @classmethod

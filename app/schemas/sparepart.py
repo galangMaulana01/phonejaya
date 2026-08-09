@@ -22,7 +22,16 @@ class SparepartCreateRequest(BaseModel):
     def not_empty(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Nama sparepart tidak boleh kosong")
+        if len(v.strip()) > 200:
+            raise ValueError("Nama sparepart maksimal 200 karakter")
         return v.strip()
+
+    @field_validator("stok", "harga_beli", "harga_jual")
+    @classmethod
+    def non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Nilai tidak boleh negatif")
+        return v
 
     @field_validator("product_link")
     @classmethod

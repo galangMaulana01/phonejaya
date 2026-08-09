@@ -408,15 +408,22 @@ async def get_cod_detail(
     if not doc:
         raise HTTPException(status_code=404, detail="COD Request tidak ditemukan")
     
+    # Legacy/incomplete records (e.g. seed data, or ones created before a
+    # field was added) don't always have every field populated — direct dict
+    # indexing here used to crash the whole endpoint with a 500 instead of
+    # just falling back to a default, unlike the list/dashboard formatter
+    # which already uses .get() throughout (see audit finding).
+    created_at = doc.get("created_at")
+    updated_at = doc.get("updated_at")
     return CODRequestDetail(
         cod_id=doc["cod_id"],
-        type=doc["type"],
-        status=doc["status"],
-        created_at=doc["created_at"].isoformat() if isinstance(doc["created_at"], datetime) else str(doc["created_at"]),
-        updated_at=doc["updated_at"].isoformat() if isinstance(doc["updated_at"], datetime) else str(doc["updated_at"]),
-        location=doc["location"],
-        wa_number=doc["wa_number"],
-        screenshot_url=doc["screenshot_url"],
+        type=doc.get("type", ""),
+        status=doc.get("status", ""),
+        created_at=created_at.isoformat() if isinstance(created_at, datetime) else str(created_at or ""),
+        updated_at=updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at or ""),
+        location=doc.get("location", ""),
+        wa_number=doc.get("wa_number", ""),
+        screenshot_url=doc.get("screenshot_url") or "",
         note=doc.get("note"),
         product_name=doc.get("product_name"),
         offer_price=doc.get("offer_price"),
@@ -425,8 +432,8 @@ async def get_cod_detail(
         delivery_address=doc.get("delivery_address"),
         wa_customer=doc.get("wa_customer"),
         items=doc.get("items"),
-        kasir_id=doc["kasir_id"],
-        kasir_name=doc["kasir_name"],
+        kasir_id=doc.get("kasir_id", ""),
+        kasir_name=doc.get("kasir_name", ""),
         kurir_id=doc.get("kurir_id"),
         kurir_name=doc.get("kurir_name"),
         status_history=doc.get("status_history") or [],
@@ -501,7 +508,7 @@ async def approve_beli_cod(
         raise HTTPException(status_code=400, detail="Data unit tidak ditemukan di COD")
 
     # ══ Step 3: Create unit ══
-    from app.utils.id_generator import next_unit_id
+    from app.utils.id_generator import next_unit_id, resolve_kategori
     from app.services.unit_service import route_unit_to_inventory_or_service
 
     kat_kode = final_unit_data.get("kat_kode", "AI")
@@ -531,7 +538,7 @@ async def approve_beli_cod(
         "battery": final_unit_data.get("battery", 100),
         "battery_health": final_unit_data.get("battery_health", 0),
         "status": "Service" if kondisi_hp == "Repair" else "Tersedia",
-        "kategori": final_unit_data.get("kategori", "Android"),
+        "kategori": final_unit_data.get("kategori") or resolve_kategori(kat_kode),
         "catatan": catatan or f"COD Beli {doc['cod_id']}",
         "cabang": cabang,
         "locked": True,
@@ -782,22 +789,28 @@ async def get_kurir_monitoring(
     Get kurir monitoring stats per cabang for Owner/Kepala Cabang.
     Returns list of kurir with their COD stats.
     """
-    query = {}
+    # kurir_id: None marks a COD request that's still broadcasting, not yet
+    # claimed by anyone — grouping it in would otherwise produce a phantom
+    # "courier" card with no name in the monitoring UI (see audit finding).
+    query = {"kurir_id": {"$ne": None}}
     if cabang:
         query["cabang"] = cabang
-    
+
     # Date filter
     if date_from or date_to:
         from datetime import datetime, timezone, timedelta
-        wf = {}
-        if date_from:
-            wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
-        if date_to:
-            # Make date_to inclusive by adding 1 day
-            dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
-            wf["$lt"] = dt
-        query["created_at"] = wf
-    
+        try:
+            wf = {}
+            if date_from:
+                wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
+            if date_to:
+                # Make date_to inclusive by adding 1 day
+                dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+                wf["$lt"] = dt
+            query["created_at"] = wf
+        except ValueError:
+            pass
+
     # Aggregate by kurir
     pipeline = [
         {"$match": query},

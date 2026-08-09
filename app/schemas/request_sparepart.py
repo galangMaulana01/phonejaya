@@ -31,6 +31,13 @@ class RequestSparepartCreateRequest(BaseModel):
         if not v.strip(): raise ValueError("Nama tidak boleh kosong")
         return v.strip()
 
+    @field_validator("jumlah")
+    @classmethod
+    def jumlah_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Jumlah harus lebih dari 0")
+        return v
+
     @field_validator("product_link")
     @classmethod
     def validate_product_link(cls, v: Optional[str], info) -> Optional[str]:

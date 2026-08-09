@@ -147,7 +147,6 @@ async def create_transaksi(
         customer_type = payload.customer_type if payload.customer_type in ["member", "guest"] else "member"
         customer_id = None
         customer_doc = None
-        poin_dipakai = 0
         poin_baru = 0
         harga_jual_final = 0
 
@@ -173,6 +172,8 @@ async def create_transaksi(
                     customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
 
             # Points logic for member
+            if poin_dipakai < 0:
+                raise HTTPException(status_code=400, detail="poin_dipakai tidak boleh negatif")
             if customer_doc and poin_dipakai > 0:
                 customer_status = customer_doc.get("status", "Pending")
                 if customer_status != "Verified":
