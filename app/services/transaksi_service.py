@@ -296,7 +296,10 @@ async def create_transaksi_sparepart(
         total_modal += sp["harga_beli"]  * item.jumlah
         labels.append(f"{sp['nama']} x{item.jumlah}")
 
-    trx_id = await next_trx_id(db, cabang=cabang)
+    # Use the same global (non-cabang) counter as create_transaksi above —
+    # this endpoint used to mint a per-cabang "JYP-TRX-004" while the main
+    # one mints "TRX-005", two ID schemes for the same trx_id field.
+    trx_id = await next_trx_id(db)
     now    = datetime.now(timezone.utc)
     label  = ", ".join(labels)
     profit = total_jual - total_modal
