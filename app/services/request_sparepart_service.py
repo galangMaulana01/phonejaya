@@ -102,10 +102,10 @@ async def create_request(
         if not svc:
             raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
 
-        if svc.get("status") not in ("Proses", "Selesai"):
+        if svc.get("status") not in ("Proses", "Menunggu_Sparepart", "Selesai"):
             raise HTTPException(
                 status_code=400,
-                detail=f"Service status {svc.get('status')} tidak bisa request sparepart. Harus Proses atau Selesai."
+                detail=f"Service status {svc.get('status')} tidak bisa request sparepart. Harus Proses, Menunggu_Sparepart, atau Selesai."
             )
 
         if svc.get("teknisi") != actor:
