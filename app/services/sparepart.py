@@ -4,7 +4,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 
 from app.schemas.sparepart import (
-    SparepartCreateRequest, SparepartUpdateStokRequest, SparepartResponse
+    SparepartCreateRequest, SparepartUpdateStokRequest, SparepartResponse,
+    DEFAULT_SPAREPART_JENIS,
 )
 from app.services.log_service import write_log
 
@@ -19,6 +20,7 @@ def _fmt(doc: dict) -> SparepartResponse:
         sp_id       = doc.get("sp_id", str(doc["_id"])),
         nama        = doc.get("nama", ""),
         kategori    = doc.get("kategori", "Umum"),
+        jenis       = doc.get("jenis") or DEFAULT_SPAREPART_JENIS,
         satuan      = doc.get("satuan", "pcs"),
         stok        = doc.get("stok", 0),
         harga_beli  = doc.get("harga_beli", 0),
@@ -46,10 +48,16 @@ async def list_sparepart(
     db: AsyncIOMotorDatabase,
     cabang: Optional[str] = None,
     kategori: Optional[str] = None,
+    jenis: Optional[str] = None,
 ) -> List[SparepartResponse]:
     query: dict = {}
     if cabang:   query["cabang"]   = cabang
     if kategori: query["kategori"] = kategori
+    if jenis:
+        # Sparepart created before the `jenis` field existed have no such
+        # key stored at all (not even the default) — treat a missing key as
+        # "repair" so old stock isn't invisible in every jenis-filtered tab.
+        query["jenis"] = jenis if jenis != DEFAULT_SPAREPART_JENIS else {"$in": [DEFAULT_SPAREPART_JENIS, None]}
     docs = await db.sparepart.find(query).sort("nama", 1).to_list(length=None)
     return [_fmt(d) for d in docs]
 
@@ -65,6 +73,7 @@ async def create_sparepart(
         "sp_id":      sp_id,
         "nama":       payload.nama,
         "kategori":   payload.kategori,
+        "jenis":      payload.jenis,
         "satuan":     payload.satuan,
         "stok":       payload.stok,
         "harga_beli": payload.harga_beli,
@@ -121,46 +130,3 @@ async def update_stok(
     await write_log(db, actor, "Update Stok Sparepart",
         f"{sp_id} • {sp['nama']} {aksi} {abs(payload.delta)} → stok:{updated['stok']}", sp.get("cabang",""))
     return _fmt(updated)
-
-
-async def kurangi_stok_batch(
-    db: AsyncIOMotorDatabase,
-    items: list,   # [{"sp_id": str, "jumlah": int}]
-    actor: str,
-    cabang: str,
-) -> list:
-    """Kurangi stok beberapa sparepart sekaligus — dipanggil saat service Selesai.
-    Uses atomic find_one_and_update per item to prevent race conditions.
-
-    Returns the subset of `items` whose stock was actually deducted. A caller
-    that unconditionally bills the unit's modal cost for every item in
-    `items` — instead of just the ones this returns — will overcharge for
-    sparepart that was never actually taken out of inventory (this happened
-    across two tickets both claiming the same limited stock: the ticket that
-    lost the race still had its cost incremented for a deduction that had
-    just been logged as failed).
-    """
-    deducted: list = []
-    for item in items:
-        jumlah = item["jumlah"]
-        sp_id = item["sp_id"]
-
-        # Atomic: only deduct if stok >= jumlah AND belongs to cabang
-        result = await db.sparepart.find_one_and_update(
-            {"sp_id": sp_id, "cabang": cabang, "stok": {"$gte": jumlah}},
-            {"$inc": {"stok": -jumlah}, "$set": {"updated_at": datetime.now(timezone.utc)}},
-            return_document=True,
-        )
-        if not result:
-            # Sparepart not found OR insufficient stock — log and skip
-            sp = await db.sparepart.find_one({"sp_id": sp_id})
-            nama = sp["nama"] if sp else sp_id
-            stok_now = sp["stok"] if sp else 0
-            await write_log(db, actor, "Gagal Pemakaian Sparepart",
-                f"{sp_id} • {nama} — stok tidak cukup atau tidak ditemukan (diminta {jumlah}, tersedia {stok_now})", cabang)
-            continue
-
-        deducted.append(item)
-        await write_log(db, actor, "Pemakaian Sparepart Service",
-            f"{sp_id} • {result['nama']} -{jumlah} → stok:{result['stok']}", cabang)
-    return deducted

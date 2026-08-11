@@ -7,7 +7,6 @@ from app.schemas.service import (
     ServiceUpdateRequest, ServiceResponse, StatusServiceEnum, ServiceUseSparepartRequest
 )
 from app.utils.formatters import fmt_waktu
-from app.services.sparepart import kurangi_stok_batch as sp_kurangi_stok_batch
 from app.services.log_service import write_log
 
 
@@ -148,22 +147,16 @@ async def update_service(
                 {"$set": {"status": "Ditolak", "updated_at": datetime.now(timezone.utc)}}
             )
 
-        # Kalau Selesai → kurangi stok sparepart yang dipakai, dan tambahkan
-        # biayanya ke harga_modal unit (konvensi sama seperti approve_request
-        # di request_sparepart_service.py: delta = harga_jual x jumlah).
+        # Kalau Selesai → tambahkan biaya sparepart yang dipakai ke harga_modal
+        # unit (konvensi sama seperti approve_request di
+        # request_sparepart_service.py: delta = harga_jual x jumlah). Stoknya
+        # sendiri SUDAH dipotong atomik sejak teknisi memilihnya lewat
+        # use_sparepart — tidak ada lagi pengurangan stok di titik ini.
         if new_status == "Selesai":
             sp_items = doc.get("sparepart_items", [])
             if sp_items:
-                # Only the items kurangi_stok_batch actually deducted count
-                # toward the unit's modal cost — billing for a deduction that
-                # was logged as failed (insufficient stock, e.g. another
-                # ticket already claimed it) would overstate the unit's cost
-                # against inventory that was never actually taken.
-                deducted_items = await sp_kurangi_stok_batch(
-                    db, items=sp_items, actor=actor, cabang=doc.get("cabang", "")
-                )
                 total_delta = 0
-                for item in deducted_items:
+                for item in sp_items:
                     sp = await db.sparepart.find_one({"sp_id": item["sp_id"], "cabang": doc.get("cabang", "")})
                     if sp:
                         total_delta += sp.get("harga_jual", 0) * item["jumlah"]
@@ -174,7 +167,7 @@ async def update_service(
                     )
                     await write_log(
                         db, actor, "Update Modal Sparepart (Servis)",
-                        f"Unit {doc['unit_id']} modal +Rp{total_delta:,} dari {len(deducted_items)} sparepart servis {service_id}",
+                        f"Unit {doc['unit_id']} modal +Rp{total_delta:,} dari {len(sp_items)} sparepart servis {service_id}",
                         doc.get("cabang", "")
                     )
 
@@ -213,12 +206,13 @@ async def update_service(
 async def use_sparepart(
     db, service_id: str, payload: ServiceUseSparepartRequest, actor: str, actor_role: str,
 ) -> ServiceResponse:
-    """Teknisi pakai sparepart yang sudah ada di stok cabang selagi servis
-    masih Proses — dicatat di sparepart_items, stok baru benar-benar
-    dikurangi (dan modal unit ditambah) saat tiket ini di-set Selesai
-    (lihat update_service di atas), supaya konsisten dengan satu titik
-    pengurangan stok yang sudah ada, dan gampang di-'remove_sparepart' lagi
-    kalau teknisi salah pilih sebelum servis selesai.
+    """Teknisi ambil sparepart dari stok cabang untuk servis ini selagi servis
+    masih Proses. Stok dipotong ATOMIK DAN LANGSUNG di sini — bukan ditunda
+    sampai tiket di-set Selesai — supaya dua tiket yang rebutan sisa stok
+    yang sama saling ditolak tepat di titik pemilihan (dapat error stok
+    tidak cukup seketika), bukan salah satunya diam-diam gagal dipotong
+    belakangan sementara modal unit tetap kena tagihan (lihat audit
+    multi-role: bug overcommit sparepart).
     """
     doc = await db.service.find_one({"service_id": service_id})
     if not doc:
@@ -228,35 +222,49 @@ async def use_sparepart(
     if doc.get("status") != "Proses":
         raise HTTPException(status_code=400, detail="Sparepart hanya bisa dipakai selagi servis berstatus Proses")
 
-    sp = await db.sparepart.find_one({"sp_id": payload.sp_id, "cabang": doc.get("cabang", "")})
-    if not sp:
-        raise HTTPException(status_code=404, detail=f"Sparepart {payload.sp_id} tidak ditemukan di cabang ini")
+    cabang = doc.get("cabang", "")
+    now = datetime.now(timezone.utc)
 
-    # Early feedback against stok yang sekarang tersedia, dikurangi dulu
-    # dengan apa yang sudah "dijatah" tiket ini sendiri untuk sp_id yang
-    # sama — pengecekan final &amp; atomik yang sebenarnya tetap di
-    # kurangi_stok_batch saat status berubah ke Selesai.
-    already_used = sum(i["jumlah"] for i in doc.get("sparepart_items", []) if i["sp_id"] == payload.sp_id)
-    if sp.get("stok", 0) - already_used < payload.jumlah:
+    existing_sp = await db.sparepart.find_one({"sp_id": payload.sp_id, "cabang": cabang})
+    if not existing_sp:
+        raise HTTPException(status_code=404, detail=f"Sparepart {payload.sp_id} tidak ditemukan di cabang ini")
+    if existing_sp.get("jenis") not in (None, "repair"):
         raise HTTPException(
             status_code=400,
-            detail=f"Stok {sp['nama']} tidak cukup. Tersedia: {sp.get('stok', 0) - already_used}, diminta: {payload.jumlah}"
+            detail=f"{existing_sp['nama']} adalah sparepart untuk dijual, bukan untuk repair — tidak bisa dipakai di sini"
+        )
+
+    # Atomic claim: only succeeds if real stok >= jumlah right now.
+    sp = await db.sparepart.find_one_and_update(
+        {"sp_id": payload.sp_id, "cabang": cabang, "stok": {"$gte": payload.jumlah}},
+        {"$inc": {"stok": -payload.jumlah}, "$set": {"updated_at": now}},
+        return_document=True,
+    )
+    if not sp:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stok {existing_sp['nama']} tidak cukup. Tersedia: {existing_sp.get('stok', 0)}, diminta: {payload.jumlah}"
         )
 
     # Merge into the existing line for this sp_id (if any) instead of
     # pushing a duplicate entry, so each sparepart appears at most once and
-    # removing it later is unambiguous.
+    # removing it later is unambiguous. Keep the ORIGINAL mulai_pakai when
+    # merging — it reflects when this part was first picked, not the latest
+    # top-up.
     items = doc.get("sparepart_items", [])
     existing = next((i for i in items if i["sp_id"] == sp["sp_id"]), None)
     if existing:
         existing["jumlah"] += payload.jumlah
     else:
-        items.append({"sp_id": sp["sp_id"], "nama": sp["nama"], "jumlah": payload.jumlah, "harga_jual": sp.get("harga_jual", 0)})
+        items.append({
+            "sp_id": sp["sp_id"], "nama": sp["nama"], "jumlah": payload.jumlah,
+            "harga_jual": sp.get("harga_jual", 0), "mulai_pakai": now,
+        })
     await db.service.update_one(
         {"service_id": service_id},
-        {"$set": {"sparepart_items": items, "updated_at": datetime.now(timezone.utc)}}
+        {"$set": {"sparepart_items": items, "updated_at": now}}
     )
-    await write_log(db, actor, "Pakai Sparepart Servis", f"{service_id} → {sp['nama']} x{payload.jumlah}", doc.get("cabang", ""))
+    await write_log(db, actor, "Pakai Sparepart Servis", f"{service_id} → {sp['nama']} x{payload.jumlah} (stok tersisa: {sp['stok']})", cabang)
     updated = await db.service.find_one({"service_id": service_id})
     return _fmt(updated)
 
@@ -264,7 +272,9 @@ async def use_sparepart(
 async def remove_sparepart(
     db, service_id: str, sp_id: str, actor: str, actor_role: str,
 ) -> ServiceResponse:
-    """Batalkan satu pemakaian sparepart yang salah pilih, sebelum tiket Selesai."""
+    """Batalkan satu pemakaian sparepart yang salah pilih, sebelum tiket
+    Selesai — stok yang sudah dipotong atomik oleh use_sparepart dikembalikan
+    penuh."""
     doc = await db.service.find_one({"service_id": service_id})
     if not doc:
         raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
@@ -277,11 +287,16 @@ async def remove_sparepart(
     idx = next((i for i, it in enumerate(items) if it["sp_id"] == sp_id), None)
     if idx is None:
         raise HTTPException(status_code=404, detail=f"{sp_id} tidak ada di daftar pemakaian tiket ini")
-    items.pop(idx)
+    removed = items.pop(idx)
+    now = datetime.now(timezone.utc)
+    await db.sparepart.update_one(
+        {"sp_id": sp_id, "cabang": doc.get("cabang", "")},
+        {"$inc": {"stok": removed["jumlah"]}, "$set": {"updated_at": now}}
+    )
     await db.service.update_one(
         {"service_id": service_id},
-        {"$set": {"sparepart_items": items, "updated_at": datetime.now(timezone.utc)}}
+        {"$set": {"sparepart_items": items, "updated_at": now}}
     )
-    await write_log(db, actor, "Batalkan Pakai Sparepart Servis", f"{service_id} → {sp_id}", doc.get("cabang", ""))
+    await write_log(db, actor, "Batalkan Pakai Sparepart Servis", f"{service_id} → {sp_id} x{removed['jumlah']} (stok dikembalikan)", doc.get("cabang", ""))
     updated = await db.service.find_one({"service_id": service_id})
     return _fmt(updated)

@@ -1,10 +1,17 @@
 from pydantic import BaseModel, field_validator
 from typing import Optional
 
+# repair: dipakai teknisi buat perbaikan, nambah modal HP yang direpair.
+# dijual: dijual langsung ke customer lewat modul Transaksi, punya harga_jual sendiri.
+# equipment: alat kerja teknisi yang tidak habis pakai (bukan dipakai/dijual per-unit).
+SPAREPART_JENIS = {"repair", "dijual", "equipment"}
+DEFAULT_SPAREPART_JENIS = "repair"
+
 
 class SparepartCreateRequest(BaseModel):
     nama:        str
     kategori:    str = "Umum"   # Umum / Packaging / LCD / Baterai / dll
+    jenis:       str = DEFAULT_SPAREPART_JENIS
     satuan:      str = "pcs"
     stok:        int = 0
     harga_beli:  int = 0
@@ -25,6 +32,13 @@ class SparepartCreateRequest(BaseModel):
         if len(v.strip()) > 200:
             raise ValueError("Nama sparepart maksimal 200 karakter")
         return v.strip()
+
+    @field_validator("jenis")
+    @classmethod
+    def jenis_valid(cls, v: str) -> str:
+        if v not in SPAREPART_JENIS:
+            raise ValueError(f"Jenis harus salah satu dari: {', '.join(sorted(SPAREPART_JENIS))}")
+        return v
 
     @field_validator("stok", "harga_beli", "harga_jual")
     @classmethod
@@ -55,6 +69,7 @@ class SparepartResponse(BaseModel):
     sp_id:       str
     nama:        str
     kategori:    str
+    jenis:       str = DEFAULT_SPAREPART_JENIS
     satuan:      str
     stok:        int
     harga_beli:  int
