@@ -31,6 +31,21 @@ class ServiceCreateRequest(BaseModel):
         return v.strip()
 
 
+class ServiceUseSparepartRequest(BaseModel):
+    """Teknisi pakai sparepart yang SUDAH ADA di stok cabang untuk servis
+    ini secara langsung — beda dari request_sparepart (yang lewat approval
+    kepala_cabang -> kasir untuk part yang belum/tidak ada di stok)."""
+    sp_id:  str
+    jumlah: int = 1
+
+    @field_validator("jumlah")
+    @classmethod
+    def jumlah_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Jumlah harus lebih dari 0")
+        return v
+
+
 class ServiceUpdateRequest(BaseModel):
     """
     Hanya teknisi yang bisa update status & catatan.

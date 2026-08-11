@@ -4,7 +4,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
 from app.config.database import get_db
-from app.schemas.service import ServiceUpdateRequest
+from app.schemas.service import ServiceUpdateRequest, ServiceUseSparepartRequest
 from app.schemas.common import ok
 from app.services import service_service
 from app.middlewares.auth import require_teknisi_or_owner, require_any, require_kasir_teknisi_or_owner, require_kepala_or_owner
@@ -75,6 +75,38 @@ async def update_service(
         user_cabang=user.get("cabang", ""),
     )
     return ok(item.model_dump(), message="Service berhasil diupdate")
+
+
+@router.post("/{service_id}/sparepart")
+async def use_sparepart(
+    service_id: str,
+    body:  ServiceUseSparepartRequest,
+    db:    AsyncIOMotorDatabase = Depends(get_db),
+    user:  dict = Depends(require_teknisi_or_owner),
+):
+    """Teknisi pakai sparepart yang sudah ada di stok cabang, langsung, selagi servis Proses."""
+    item = await service_service.use_sparepart(
+        db, service_id, body,
+        actor=user.get("name", user.get("username", "")),
+        actor_role=user.get("role", ""),
+    )
+    return ok(item.model_dump(), message=f"{body.sp_id} ditambahkan ke servis {service_id}")
+
+
+@router.delete("/{service_id}/sparepart/{sp_id}")
+async def remove_sparepart(
+    service_id: str,
+    sp_id: str,
+    db:    AsyncIOMotorDatabase = Depends(get_db),
+    user:  dict = Depends(require_teknisi_or_owner),
+):
+    """Batalkan satu pemakaian sparepart yang salah pilih, sebelum servis Selesai."""
+    item = await service_service.remove_sparepart(
+        db, service_id, sp_id,
+        actor=user.get("name", user.get("username", "")),
+        actor_role=user.get("role", ""),
+    )
+    return ok(item.model_dump(), message=f"{sp_id} dibatalkan dari servis {service_id}")
 
 
 @router.get("/{service_id}/detail")

@@ -5,7 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 
 from app.schemas.unit import (
-    UnitCreateRequest, ApproveRepairRequest,
+    UnitCreateRequest, ApproveRepairRequest, UnitUpdateRequest,
     UnitResponse, KondisiHP
 )
 from app.utils.id_generator import next_unit_id, next_service_id, resolve_kategori, resolve_kondisi
@@ -324,3 +324,46 @@ async def approve_repair(
     )
 
     return _fmt(updated)
+
+
+async def update_unit(
+    db, unit_id: str, payload: UnitUpdateRequest, actor: str, user_role: str, user_cabang: str,
+) -> UnitResponse:
+    """Kepala cabang/owner koreksi harga unit yang masih Tersedia (belum terjual)."""
+    unit = await db.units.find_one({"unit_id": unit_id})
+    if not unit:
+        raise HTTPException(status_code=404, detail=f"Unit {unit_id} tidak ditemukan")
+    if user_role != "owner" and unit.get("cabang") != user_cabang:
+        raise HTTPException(status_code=403, detail="Unit bukan milik cabang Anda")
+    if unit.get("status") != "Tersedia":
+        raise HTTPException(status_code=400, detail=f"Harga hanya bisa diubah selagi unit berstatus Tersedia (status saat ini: {unit.get('status')})")
+
+    updates = {}
+    if payload.harga_jual is not None:
+        updates["harga_jual"] = payload.harga_jual
+    if payload.harga_modal is not None:
+        updates["harga_modal"] = payload.harga_modal
+    if not updates:
+        raise HTTPException(status_code=422, detail="Tidak ada perubahan harga yang dikirim")
+
+    updates["updated_at"] = datetime.now(timezone.utc)
+    await db.units.update_one({"unit_id": unit_id}, {"$set": updates})
+    updated = await db.units.find_one({"unit_id": unit_id})
+
+    changes = ", ".join(f"{k}→Rp {v:,}" for k, v in updates.items() if k != "updated_at")
+    await write_log(db, actor, "Update Harga Unit", f"{unit_id} • {changes}", unit.get("cabang", ""))
+    return _fmt(updated)
+
+
+async def delete_unit(db, unit_id: str, actor: str, user_role: str, user_cabang: str) -> None:
+    """Kepala cabang/owner hapus unit yang salah input, selama belum terjual/diproses."""
+    unit = await db.units.find_one({"unit_id": unit_id})
+    if not unit:
+        raise HTTPException(status_code=404, detail=f"Unit {unit_id} tidak ditemukan")
+    if user_role != "owner" and unit.get("cabang") != user_cabang:
+        raise HTTPException(status_code=403, detail="Unit bukan milik cabang Anda")
+    if unit.get("status") != "Tersedia":
+        raise HTTPException(status_code=400, detail=f"Unit hanya bisa dihapus selagi berstatus Tersedia (status saat ini: {unit.get('status')})")
+
+    await db.units.delete_one({"unit_id": unit_id})
+    await write_log(db, actor, "Hapus Unit", f"{unit_id} • {unit.get('merk','')} {unit.get('tipe','')}", unit.get("cabang", ""))

@@ -87,6 +87,19 @@ class UnitCreateRequest(BaseModel):
 
 
 
+class UnitUpdateRequest(BaseModel):
+    """Kepala cabang/owner koreksi harga unit yang sudah masuk stok (misal salah input)."""
+    harga_jual:  Optional[int] = None
+    harga_modal: Optional[int] = None
+
+    @field_validator("harga_jual", "harga_modal")
+    @classmethod
+    def non_negative(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v < 0:
+            raise ValueError("Harga tidak boleh negatif")
+        return v
+
+
 class ApproveRepairRequest(BaseModel):
     harga_jual: int
 

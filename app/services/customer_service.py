@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
@@ -130,12 +131,16 @@ async def list_customers(
     db: AsyncIOMotorDatabase,
     cabang: Optional[str] = None,
     status: Optional[str] = None,
+    q: Optional[str] = None,
 ) -> List[CustomerListItem]:
     query: dict = {}
     if cabang:
         query["cabang"] = cabang
     if status:
         query["status"] = status
+    if q:
+        regex = {"$regex": re.escape(q), "$options": "i"}
+        query["$or"] = [{"nama": regex}, {"kontak": regex}]
 
     docs = await db.customers.find(query).sort("created_at", -1).to_list(length=200)
     return [_fmt_list(d) for d in docs]

@@ -39,9 +39,10 @@ async def get_stats(
     # Financial - with date filter
     pipeline_fin = [{"$match": trx_query}, {"$group": {"_id": None,
         "total_revenue": {"$sum": "$harga_jual"}, "total_modal": {"$sum": "$harga_modal"},
-        "total_profit": {"$sum": "$profit"}, "total_trx": {"$sum": 1}}}]
+        "total_profit": {"$sum": "$profit"}, "total_trx": {"$sum": 1},
+        "total_poin_dipakai": {"$sum": "$poin_dipakai"}, "total_poin_dapat": {"$sum": "$poin_dapat"}}}]
     fin_raw = await db.transaksi.aggregate(pipeline_fin).to_list(length=1)
-    fin = fin_raw[0] if fin_raw else {"total_revenue":0,"total_modal":0,"total_profit":0,"total_trx":0}
+    fin = fin_raw[0] if fin_raw else {"total_revenue":0,"total_modal":0,"total_profit":0,"total_trx":0,"total_poin_dipakai":0,"total_poin_dapat":0}
 
     # Today profit (always today, not filtered by custom date)
     today = datetime.now(timezone.utc).date()
@@ -68,7 +69,9 @@ async def get_stats(
                  "service": status_map.get("Service",0)},
         "keuangan": {"total_revenue": fin["total_revenue"], "total_modal": fin["total_modal"],
                      "total_profit": fin["total_profit"], "profit_harian": profit_harian,
-                     "total_transaksi": fin["total_trx"]},
+                     "total_transaksi": fin["total_trx"],
+                     "total_poin_dipakai": fin["total_poin_dipakai"], "total_poin_dapat": fin["total_poin_dapat"],
+                     "biaya_poin_dipakai": fin["total_poin_dipakai"] * 1000},
         "recent_transaksi": recent,
         "pending_customers": pending_customers,
     }
