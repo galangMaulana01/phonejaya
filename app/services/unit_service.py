@@ -341,8 +341,6 @@ async def update_unit(
     updates = {}
     if payload.harga_jual is not None:
         updates["harga_jual"] = payload.harga_jual
-    if payload.harga_modal is not None:
-        updates["harga_modal"] = payload.harga_modal
     if not updates:
         raise HTTPException(status_code=422, detail="Tidak ada perubahan harga yang dikirim")
 

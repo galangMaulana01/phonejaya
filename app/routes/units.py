@@ -81,7 +81,7 @@ async def update_unit(
     db:      AsyncIOMotorDatabase = Depends(get_db),
     user:    dict = Depends(require_kepala_or_owner),
 ):
-    """Koreksi harga_jual/harga_modal unit yang masih Tersedia (salah input)."""
+    """Koreksi harga_jual unit yang masih Tersedia (salah input). harga_modal tidak bisa diubah lewat sini."""
     unit = await unit_service.update_unit(
         db, unit_id, body,
         actor=user.get("name", user.get("username", "")),

@@ -88,11 +88,14 @@ class UnitCreateRequest(BaseModel):
 
 
 class UnitUpdateRequest(BaseModel):
-    """Kepala cabang/owner koreksi harga unit yang sudah masuk stok (misal salah input)."""
+    """Kepala cabang/owner koreksi harga jual unit yang sudah masuk stok (misal
+    salah input). harga_modal TIDAK bisa dikoreksi lewat sini — modal hanya
+    berubah lewat jalur yang tercatat (input awal, penambahan biaya sparepart
+    servis), bukan edit manual, supaya tidak ada celah menaik/turunkan modal
+    demi memoles angka profit."""
     harga_jual:  Optional[int] = None
-    harga_modal: Optional[int] = None
 
-    @field_validator("harga_jual", "harga_modal")
+    @field_validator("harga_jual")
     @classmethod
     def non_negative(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and v < 0:
