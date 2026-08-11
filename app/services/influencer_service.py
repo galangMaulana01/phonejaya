@@ -6,6 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 from bson import ObjectId
 from bson.errors import InvalidId
+from pymongo.errors import DuplicateKeyError
 
 from app.schemas.influencer import (
     VideoCreateRequest,
@@ -308,8 +309,19 @@ async def create_video(
         "created_at": now,
     }
 
-    result = await db.influencer_videos.insert_one(doc)
-    doc["_id"] = result.inserted_id
+    # video_id comes from an atomic per-cabang counter, but a counter that's
+    # out of sync with existing documents (e.g. records inserted directly,
+    # bypassing the counter) can still collide — retry with a fresh id a few
+    # times instead of surfacing a raw 500 for what's a recoverable clash.
+    for _ in range(3):
+        try:
+            result = await db.influencer_videos.insert_one(doc)
+            doc["_id"] = result.inserted_id
+            break
+        except DuplicateKeyError:
+            doc["video_id"] = video_id = await next_video_id(db, cabang)
+    else:
+        raise HTTPException(status_code=500, detail="Gagal membuat video ID unik, coba lagi")
 
     await write_log(
         db, actor, "Buat Video Influencer",
@@ -345,7 +357,7 @@ async def list_videos(
                 wf["$lt"] = dt
             query["uploaded_at"] = wf
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="Format date_from/date_to tidak valid")
 
     docs = await db.influencer_videos.find(query).sort("uploaded_at", -1).limit(limit).to_list(length=limit)
     return [_fmt_video(d) for d in docs]
@@ -528,7 +540,7 @@ async def list_all_videos_owner(
                 wf["$lt"] = dt
             query["uploaded_at"] = wf
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="Format date_from/date_to tidak valid")
 
     docs = await db.influencer_videos.find(query).sort("uploaded_at", -1).limit(limit).to_list(length=limit)
     return [_fmt_video(d) for d in docs]

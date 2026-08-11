@@ -128,6 +128,7 @@ class CODRequestDetail(BaseModel):
     kurir_id: Optional[str] = None
     kurir_name: Optional[str] = None
     status_history: List[dict] = []
+    cabang: str = ""
 
 
 class KurirListItem(BaseModel):

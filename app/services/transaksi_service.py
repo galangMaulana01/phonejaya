@@ -205,7 +205,7 @@ async def create_transaksi(
             customer_id = None
             customer_doc = None
             poin_dipakai = 0
-            poin_baru = int(harga_jual_base // 100000)
+            poin_baru = 0  # guests have no customer record to bank points into
             harga_jual_final = harga_jual_base
 
         # ── Determine tipe ──

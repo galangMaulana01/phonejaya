@@ -83,6 +83,8 @@ async def get_cod_detail(
 ):
     """Detail COD request."""
     cod = await cod_service.get_cod_detail(db, cod_id)
+    if user.get("role") != "owner" and cod.cabang != user.get("cabang"):
+        raise HTTPException(status_code=403, detail="Bukan hak anda untuk melihat COD ini")
     return ok(cod.model_dump())
 
 
@@ -119,7 +121,7 @@ async def kurir_accept(
     kurir_id = user.get("sub") or user.get("username")
     kurir_name = user.get("name") or user.get("username")
     
-    cod = await cod_service.update_cod_status(db, cod_id, "diterima", kurir_id, kurir_name)
+    cod = await cod_service.update_cod_status(db, cod_id, "diterima", kurir_id, kurir_name, actor_cabang=user.get("cabang", ""))
     return ok(cod.model_dump(), message=f"COD {cod_id} diterima")
 
 
@@ -265,7 +267,13 @@ async def kurir_submit_beli(
     unit_data = payload.get("unit_data")
     if not deal_price or not unit_data:
         raise HTTPException(status_code=400, detail="deal_price dan unit_data wajib diisi")
-    
+    if not isinstance(deal_price, (int, float)) or deal_price <= 0:
+        raise HTTPException(status_code=400, detail="deal_price harus lebih dari 0")
+    for imei_field in ("imei", "imei2"):
+        imei_value = unit_data.get(imei_field)
+        if imei_value and imei_value != "-" and not re.match(r"^\d{14,16}$", str(imei_value)):
+            raise HTTPException(status_code=400, detail=f"{imei_field.upper()} harus 14-16 digit angka, atau \"-\" jika tidak ada")
+
     cod = await cod_service.submit_kurir_beli(db, cod_id, kurir_id, kurir_name, deal_price, unit_data)
     return ok(cod.model_dump(), message=f"COD {cod_id} menunggu approval kasir")
 

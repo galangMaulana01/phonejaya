@@ -128,9 +128,19 @@ async def kurangi_stok_batch(
     items: list,   # [{"sp_id": str, "jumlah": int}]
     actor: str,
     cabang: str,
-) -> None:
+) -> list:
     """Kurangi stok beberapa sparepart sekaligus — dipanggil saat service Selesai.
-    Uses atomic find_one_and_update per item to prevent race conditions."""
+    Uses atomic find_one_and_update per item to prevent race conditions.
+
+    Returns the subset of `items` whose stock was actually deducted. A caller
+    that unconditionally bills the unit's modal cost for every item in
+    `items` — instead of just the ones this returns — will overcharge for
+    sparepart that was never actually taken out of inventory (this happened
+    across two tickets both claiming the same limited stock: the ticket that
+    lost the race still had its cost incremented for a deduction that had
+    just been logged as failed).
+    """
+    deducted: list = []
     for item in items:
         jumlah = item["jumlah"]
         sp_id = item["sp_id"]
@@ -150,5 +160,7 @@ async def kurangi_stok_batch(
                 f"{sp_id} • {nama} — stok tidak cukup atau tidak ditemukan (diminta {jumlah}, tersedia {stok_now})", cabang)
             continue
 
+        deducted.append(item)
         await write_log(db, actor, "Pemakaian Sparepart Service",
             f"{sp_id} • {result['nama']} -{jumlah} → stok:{result['stok']}", cabang)
+    return deducted

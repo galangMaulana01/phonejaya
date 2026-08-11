@@ -216,10 +216,14 @@ async def approve_customer(
     actor_id: str,
     actor_name: str,
     actor_role: str,
+    actor_cabang: str = "",
 ) -> CustomerResponse:
     doc = await db.customers.find_one({"_id": ObjectId(customer_id)})
     if not doc:
         raise HTTPException(404, "Customer tidak ditemukan")
+
+    if actor_role != "owner" and doc.get("cabang") != actor_cabang:
+        raise HTTPException(403, "Bukan hak anda untuk memverifikasi customer ini")
 
     current_status = doc.get("status", "Pending")
     await _validate_transition(current_status, "Verified", actor_role)
@@ -265,10 +269,14 @@ async def reject_customer(
     actor_id: str,
     actor_name: str,
     actor_role: str,
+    actor_cabang: str = "",
 ) -> CustomerResponse:
     doc = await db.customers.find_one({"_id": ObjectId(customer_id)})
     if not doc:
         raise HTTPException(404, "Customer tidak ditemukan")
+
+    if actor_role != "owner" and doc.get("cabang") != actor_cabang:
+        raise HTTPException(403, "Bukan hak anda untuk menolak customer ini")
 
     current_status = doc.get("status", "Pending")
     await _validate_transition(current_status, "Rejected", actor_role)

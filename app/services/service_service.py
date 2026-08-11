@@ -12,27 +12,30 @@ from app.services.log_service import write_log
 
 
 def _fmt(doc: dict) -> ServiceResponse:
-    # Pakai .get() dengan fallback di semua field
-    # agar dokumen lama yang tidak punya field tertentu tidak crash KeyError
+    # Pakai .get(field) or default di semua field — bukan .get(field, default),
+    # karena .get(field, default) hanya fallback kalau field-nya BENAR-BENAR TIDAK ADA;
+    # kalau field ada tapi nilainya None (mis. teknisi belum ditugaskan dan tersimpan
+    # sebagai null bukan ""), .get() tetap mengembalikan None dan bikin ServiceResponse
+    # (yang mewajibkan str/list, bukan Optional) gagal validasi -> 500 untuk seluruh list.
     return ServiceResponse(
         id=str(doc["_id"]),
-        service_id=doc.get("service_id", str(doc["_id"])),
-        unit_id=doc.get("unit_id", ""),
-        unit_label=doc.get("unit_label", ""),
-        nama_customer=doc.get("nama_customer", ""),
-        kontak_customer=doc.get("kontak_customer", ""),
-        keluhan=doc.get("keluhan", ""),
-        catatan_kerusakan=doc.get("catatan_kerusakan", ""),
-        status=doc.get("status", "Antrian"),
-        teknisi=doc.get("teknisi", ""),
-        foto_urls=doc.get("foto_urls", []),
-        cabang=doc.get("cabang", ""),
+        service_id=doc.get("service_id") or str(doc["_id"]),
+        unit_id=doc.get("unit_id") or "",
+        unit_label=doc.get("unit_label") or "",
+        nama_customer=doc.get("nama_customer") or "",
+        kontak_customer=doc.get("kontak_customer") or "",
+        keluhan=doc.get("keluhan") or "",
+        catatan_kerusakan=doc.get("catatan_kerusakan") or "",
+        status=doc.get("status") or "Antrian",
+        teknisi=doc.get("teknisi") or "",
+        foto_urls=doc.get("foto_urls") or [],
+        cabang=doc.get("cabang") or "",
         estimasi_selesai=doc.get("estimasi_selesai"),
         created_at=fmt_waktu(doc["created_at"]) if doc.get("created_at") else "",
         updated_at=fmt_waktu(doc["updated_at"]) if doc.get("updated_at") else None,
-        foto_before_urls=doc.get("foto_before_urls", []),
-        foto_after_urls=doc.get("foto_after_urls", []),
-        sparepart_items=doc.get("sparepart_items", []),
+        foto_before_urls=doc.get("foto_before_urls") or [],
+        foto_after_urls=doc.get("foto_after_urls") or [],
+        sparepart_items=doc.get("sparepart_items") or [],
     )
 
 
@@ -151,11 +154,16 @@ async def update_service(
         if new_status == "Selesai":
             sp_items = doc.get("sparepart_items", [])
             if sp_items:
-                await sp_kurangi_stok_batch(
+                # Only the items kurangi_stok_batch actually deducted count
+                # toward the unit's modal cost — billing for a deduction that
+                # was logged as failed (insufficient stock, e.g. another
+                # ticket already claimed it) would overstate the unit's cost
+                # against inventory that was never actually taken.
+                deducted_items = await sp_kurangi_stok_batch(
                     db, items=sp_items, actor=actor, cabang=doc.get("cabang", "")
                 )
                 total_delta = 0
-                for item in sp_items:
+                for item in deducted_items:
                     sp = await db.sparepart.find_one({"sp_id": item["sp_id"], "cabang": doc.get("cabang", "")})
                     if sp:
                         total_delta += sp.get("harga_jual", 0) * item["jumlah"]
@@ -166,7 +174,7 @@ async def update_service(
                     )
                     await write_log(
                         db, actor, "Update Modal Sparepart (Servis)",
-                        f"Unit {doc['unit_id']} modal +Rp{total_delta:,} dari {len(sp_items)} sparepart servis {service_id}",
+                        f"Unit {doc['unit_id']} modal +Rp{total_delta:,} dari {len(deducted_items)} sparepart servis {service_id}",
                         doc.get("cabang", "")
                     )
 

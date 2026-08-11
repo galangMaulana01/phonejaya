@@ -47,6 +47,11 @@ async def warmup_db():
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Application starting up...")
+    if settings.is_production and settings.JWT_SECRET == "dev-secret-change-in-production":
+        raise RuntimeError(
+            "JWT_SECRET is still the default dev value in a production environment — "
+            "set a real secret via the JWT_SECRET env var before starting."
+        )
     await warmup_db()
     logger.info("Application startup complete")
     yield

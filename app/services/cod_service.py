@@ -199,27 +199,33 @@ async def update_cod_status(
     actor: str,
     actor_name: str,
     note: Optional[str] = None,
-    foto_urls: Optional[List[str]] = None
+    foto_urls: Optional[List[str]] = None,
+    actor_cabang: str = "",
 ) -> CODRequestResponse:
     """Update status COD. Two paths:
     1. Delivery broadcast accept: atomic claim (kurir_id was None, now assigned)
     2. All other transitions: existing ownership check (kurir_id == actor)
     """
-    
+
     now = datetime.now(timezone.utc)
-    
+
     # ── PATH 1: Atomic claim for delivery broadcast ──
-    # When: delivery type, accepting (menunggu_kurir → diterima), kurir_id is null
+    # When: delivery type, accepting (menunggu_kurir → diterima), kurir_id is null.
+    # Also scoped to the kurir's own cabang — without this, any kurir account
+    # (regardless of branch) could claim another branch's broadcast pickup.
     if new_status == "diterima":
+        claim_filter = {
+            "cod_id": cod_id,
+            "status": "menunggu_kurir",
+            "$or": [
+                {"kurir_id": None},
+                {"kurir_id": {"$exists": False}}
+            ]
+        }
+        if actor_cabang:
+            claim_filter["cabang"] = actor_cabang
         result = await db.cod_requests.find_one_and_update(
-            {
-                "cod_id": cod_id,
-                "status": "menunggu_kurir",
-                "$or": [
-                    {"kurir_id": None},
-                    {"kurir_id": {"$exists": False}}
-                ]
-            },
+            claim_filter,
             {
                 "$set": {
                     "status": "diterima",
@@ -437,6 +443,7 @@ async def get_cod_detail(
         kurir_id=doc.get("kurir_id"),
         kurir_name=doc.get("kurir_name"),
         status_history=doc.get("status_history") or [],
+        cabang=doc.get("cabang") or "",
     )
 
 
