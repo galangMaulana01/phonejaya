@@ -6,7 +6,8 @@ from pymongo.errors import DuplicateKeyError
 
 from app.schemas.cabang import (
     CabangCreateRequest, CabangUpdateRequest,
-    AssignKepalaCabangRequest, CabangResponse
+    AssignKepalaCabangRequest, CabangResponse,
+    CabangTimezoneItem, DEFAULT_CABANG_TIMEZONE,
 )
 from app.utils.security import hash_password
 from app.services.log_service import write_log
@@ -21,6 +22,7 @@ def _fmt(doc: dict) -> CabangResponse:
         alamat           = doc.get("alamat", ""),
         telp             = doc.get("telp", ""),
         aktif            = doc.get("aktif", True),
+        timezone         = doc.get("timezone", DEFAULT_CABANG_TIMEZONE),
         kepala_cabang    = doc.get("kepala_cabang"),
         kepala_username  = doc.get("kepala_username"),
         jumlah_karyawan  = doc.get("jumlah_karyawan", 0),
@@ -39,6 +41,17 @@ async def list_cabang(db: AsyncIOMotorDatabase) -> List[CabangResponse]:
     return result
 
 
+async def list_cabang_timezones(db: AsyncIOMotorDatabase) -> List[CabangTimezoneItem]:
+    """Lightweight kode->timezone lookup, open to every authenticated role
+    (unlike list_cabang) so any page can render a record's timestamp in its
+    branch's local time without needing owner-only cabang admin data."""
+    docs = await db.cabang.find({}, {"kode": 1, "timezone": 1}).to_list(length=None)
+    return [
+        CabangTimezoneItem(kode=d.get("kode", ""), timezone=d.get("timezone", DEFAULT_CABANG_TIMEZONE))
+        for d in docs
+    ]
+
+
 async def create_cabang(
     db: AsyncIOMotorDatabase,
     payload: CabangCreateRequest,
@@ -55,6 +68,7 @@ async def create_cabang(
         "alamat":          payload.alamat,
         "telp":            payload.telp,
         "aktif":           True,
+        "timezone":        payload.timezone,
         "kepala_cabang":   None,
         "kepala_username": None,
         "created_at":      now,

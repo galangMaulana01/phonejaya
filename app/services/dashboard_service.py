@@ -55,7 +55,7 @@ async def get_stats(
     recent_docs = await db.transaksi.find(trx_query).sort("waktu", -1).limit(5).to_list(length=5)
     recent = [{"id": str(d["_id"]), "trx_id": d["trx_id"], "unit_label": d["unit_label"],
               "kasir": d["kasir"], "harga_jual": d["harga_jual"], "profit": d["profit"],
-              "waktu": fmt_waktu(d["waktu"])} for d in recent_docs]
+              "cabang": d.get("cabang", ""), "waktu": fmt_waktu(d["waktu"])} for d in recent_docs]
 
     # Pending customers count
     pending_customers_query = {"status": "Pending"}

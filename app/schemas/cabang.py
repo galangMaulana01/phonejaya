@@ -1,12 +1,23 @@
 from pydantic import BaseModel, field_validator
 from typing import Optional
 
+# Indonesia has 3 timezones, none observing DST.
+CABANG_TIMEZONES = {"Asia/Jakarta", "Asia/Makassar", "Asia/Jayapura"}
+DEFAULT_CABANG_TIMEZONE = "Asia/Jakarta"
+
+
+def _validate_timezone(v: Optional[str]) -> Optional[str]:
+    if v is not None and v not in CABANG_TIMEZONES:
+        raise ValueError(f"Timezone harus salah satu dari: {', '.join(sorted(CABANG_TIMEZONES))}")
+    return v
+
 
 class CabangCreateRequest(BaseModel):
     nama:      str
     kode:      str       # JYP, BN, dll — uppercase
     alamat:    str = ""
     telp:      str = ""
+    timezone:  str = DEFAULT_CABANG_TIMEZONE  # zona waktu lokal cabang, dipakai untuk tampilan jam
 
     @field_validator("nama", "kode")
     @classmethod
@@ -22,12 +33,18 @@ class CabangCreateRequest(BaseModel):
     def kode_upper(cls, v: str) -> str:
         return v.strip().upper()
 
+    @field_validator("timezone")
+    @classmethod
+    def timezone_valid(cls, v: str) -> str:
+        return _validate_timezone(v)
+
 
 class CabangUpdateRequest(BaseModel):
-    nama:   Optional[str] = None
-    alamat: Optional[str] = None
-    telp:   Optional[str] = None
-    aktif:  Optional[bool] = None
+    nama:     Optional[str] = None
+    alamat:   Optional[str] = None
+    telp:     Optional[str] = None
+    aktif:    Optional[bool] = None
+    timezone: Optional[str] = None
 
     @field_validator("nama")
     @classmethod
@@ -35,6 +52,11 @@ class CabangUpdateRequest(BaseModel):
         if v is not None and len(v.strip()) > 100:
             raise ValueError("Maksimal 100 karakter")
         return v
+
+    @field_validator("timezone")
+    @classmethod
+    def timezone_valid(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_timezone(v)
 
 
 class AssignKepalaCabangRequest(BaseModel):
@@ -51,7 +73,13 @@ class CabangResponse(BaseModel):
     alamat:          str
     telp:            str
     aktif:           bool
+    timezone:        str = DEFAULT_CABANG_TIMEZONE
     kepala_cabang:   Optional[str] = None   # nama kepala cabang
     kepala_username: Optional[str] = None   # username kepala cabang
     jumlah_karyawan: int = 0
     created_at:      str = ""
+
+
+class CabangTimezoneItem(BaseModel):
+    kode:     str
+    timezone: str = DEFAULT_CABANG_TIMEZONE

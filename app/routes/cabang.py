@@ -5,9 +5,9 @@ from app.schemas.cabang import CabangCreateRequest, CabangUpdateRequest, AssignK
 from app.schemas.common import ok
 from app.services.cabang_service import (
     list_cabang, create_cabang, update_cabang,
-    assign_kepala_cabang, pecat_karyawan
+    assign_kepala_cabang, pecat_karyawan, list_cabang_timezones
 )
-from app.middlewares.auth import require_owner
+from app.middlewares.auth import require_owner, require_any
 
 router = APIRouter(prefix="/cabang", tags=["Cabang"])
 
@@ -18,6 +18,18 @@ async def get_list_cabang(
     _:    dict = Depends(require_owner),
 ):
     items = await list_cabang(db)
+    return ok([i.model_dump() for i in items])
+
+
+@router.get("/timezones")
+async def get_cabang_timezones(
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    _:  dict = Depends(require_any),
+):
+    """Kode->timezone map, open to any authenticated role — used by the
+    frontend to render every record's timestamp in its own branch's local
+    time (e.g. Papua transactions in WIT, Java transactions in WIB)."""
+    items = await list_cabang_timezones(db)
     return ok([i.model_dump() for i in items])
 
 
