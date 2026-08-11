@@ -103,6 +103,20 @@ async def update_service(
             detail="Tiket sudah Approved dan unit sudah masuk stok. Tidak bisa diubah."
         )
 
+    # "Estimasi hanya setelah sparepart tersedia" — kalau tiket SEDANG
+    # Menunggu_Sparepart, teknisi belum pegang partnya jadi belum bisa kasih
+    # estimasi yang akurat. Dicek terhadap current_status (status SEBELUM
+    # request ini) dan HARUS di sini, sebelum mutasi apapun ke DB — kalau
+    # dicek setelah transisi status sudah di-commit (find_one_and_update di
+    # bawah), exception di titik itu tidak mem-rollback status yang sudah
+    # kepindah duluan, jadi tiketnya diam-diam lolos ke Proses tanpa
+    # estimasi walau responsnya error.
+    if payload.estimasi_selesai and current_status == "Menunggu_Sparepart":
+        raise HTTPException(
+            status_code=400,
+            detail="Belum bisa isi estimasi selagi masih menunggu sparepart tiba."
+        )
+
     updates: dict = {"updated_at": datetime.now(timezone.utc)}
 
     if payload.status is not None:
@@ -124,7 +138,13 @@ async def update_service(
                        f"Transisi yang diizinkan: {allowed if allowed else 'tidak ada'}"
             )
 
-        if new_status == "Proses" and not payload.estimasi_selesai:
+        # Estimasi wajib diisi saat mulai kerjakan dari Antrian. Transisi
+        # Menunggu_Sparepart -> Proses ("lanjut tanpa sparepart ini") TIDAK
+        # boleh diwajibkan isi estimasi di sini juga — larangan estimasi
+        # selagi current_status Menunggu_Sparepart (di atas) akan langsung
+        # bertentangan dan membuat transisi ini mustahil dilakukan sama
+        # sekali kalau estimasi tetap diwajibkan pada saat bersamaan.
+        if new_status == "Proses" and current_status == "Antrian" and not payload.estimasi_selesai:
             raise HTTPException(status_code=422, detail="Estimasi selesai wajib diisi saat mengubah status ke Proses")
 
         # Atomic claim on the transition: only one concurrent request can move
@@ -180,15 +200,6 @@ async def update_service(
         updates["foto_after_urls"] = payload.foto_after_urls
 
     if payload.estimasi_selesai:
-        # "Estimasi hanya setelah sparepart tersedia" — kalau tiket masih
-        # (atau baru mau pindah ke) Menunggu_Sparepart, teknisi belum pegang
-        # partnya jadi belum bisa kasih estimasi waktu selesai yang akurat.
-        blocked_status = updates.get("status", current_status)
-        if blocked_status == "Menunggu_Sparepart":
-            raise HTTPException(
-                status_code=400,
-                detail="Belum bisa isi estimasi selagi masih menunggu sparepart tiba."
-            )
         updates["estimasi_selesai"] = payload.estimasi_selesai
 
     if payload.teknisi is not None:

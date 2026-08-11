@@ -138,10 +138,16 @@ async def list_sparepart_in_use(
     cabang: Optional[str] = None,
 ) -> List[SparepartInUseItem]:
     """Sparepart 'Sedang Dipakai' — satu baris per sparepart_items entry di
-    setiap tiket servis yang masih Proses, dilengkapi info tiket/unit/teknisi.
+    setiap tiket servis yang masih Proses ATAU Menunggu_Sparepart, dilengkapi
+    info tiket/unit/teknisi. Menunggu_Sparepart perlu diikutkan juga: kalau
+    satu tiket punya >1 request sparepart dan salah satunya sudah diterima
+    (auto-reserved ke sparepart_items) sementara request lain masih belum
+    selesai, tiketnya tetap Menunggu_Sparepart sampai SEMUA request repair-nya
+    kelar — part yang sudah diterima itu tidak boleh jadi tak terlihat cuma
+    karena tiketnya belum sepenuhnya lepas dari status menunggu.
     Tidak menyentuh koleksi sparepart sama sekali (stoknya sudah dipotong
     langsung saat use_sparepart, bukan di sini) — ini murni tampilan agregasi."""
-    query: dict = {"status": "Proses", "sparepart_items": {"$ne": []}}
+    query: dict = {"status": {"$in": ["Proses", "Menunggu_Sparepart"]}, "sparepart_items": {"$ne": []}}
     if cabang:
         query["cabang"] = cabang
     tickets = await db.service.find(query).to_list(length=None)

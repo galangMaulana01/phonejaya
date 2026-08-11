@@ -102,10 +102,16 @@ async def create_request(
         if not svc:
             raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
 
-        if svc.get("status") not in ("Proses", "Menunggu_Sparepart", "Selesai"):
+        if svc.get("status") not in ("Proses", "Menunggu_Sparepart"):
+            # Sengaja TIDAK mengizinkan tiket "Selesai" lagi — begitu tiket
+            # Selesai, biaya sparepart sudah dijumlahkan sekali ke harga_modal
+            # unit (lihat update_service) dan tab "Sedang Dipakai" cuma
+            # menampilkan tiket berstatus Proses/Menunggu_Sparepart, jadi
+            # request yang masuk sesudahnya tidak akan pernah tertagih atau
+            # kelihatan lagi di manapun.
             raise HTTPException(
                 status_code=400,
-                detail=f"Service status {svc.get('status')} tidak bisa request sparepart. Harus Proses, Menunggu_Sparepart, atau Selesai."
+                detail=f"Service status {svc.get('status')} tidak bisa request sparepart. Harus Proses atau Menunggu_Sparepart."
             )
 
         if svc.get("teknisi") != actor:
@@ -175,10 +181,13 @@ async def respond_request(
     Diterima -> harga_disetujui terkunci, status lanjut ke Menunggu_Pembelian
     (giliran kasir). Ditolak -> Ditolak, dan tiket terkait dibalikin kalau
     tidak ada request lain yang masih menahannya di Menunggu_Sparepart."""
-    doc = await db.request_sparepart.find_one({"req_id": req_id})
-    if not doc: raise HTTPException(404, f"Request {req_id} tidak ditemukan")
-    if doc["status"] != "Pending": raise HTTPException(400, "Request sudah direspon")
-    if actor_role == 'kepala_cabang' and doc.get('cabang') != actor_cabang:
+    if payload.status.value == "Ditolak" and not payload.catatan.strip():
+        raise HTTPException(status_code=400, detail="Catatan alasan penolakan wajib diisi")
+
+    existing = await db.request_sparepart.find_one({"req_id": req_id})
+    if not existing:
+        raise HTTPException(404, f"Request {req_id} tidak ditemukan")
+    if actor_role == 'kepala_cabang' and existing.get('cabang') != actor_cabang:
         raise HTTPException(status_code=403, detail='Kamu tidak bisa respon request cabang lain')
 
     now = datetime.now(timezone.utc)
@@ -196,7 +205,15 @@ async def respond_request(
     elif payload.status.value == "Ditolak":
         update["status"] = "Ditolak"
 
-    await db.request_sparepart.update_one({"req_id": req_id}, {"$set": update})
+    # Atomic claim: filter juga di status "Pending" supaya dua KC (atau dua
+    # klik ganda) yang merespon request yang sama tepat bersamaan tidak
+    # berdua-duanya "berhasil" menimpa keputusan satu sama lain.
+    filt = {"req_id": req_id, "status": "Pending"}
+    if actor_role == 'kepala_cabang':
+        filt["cabang"] = actor_cabang
+    doc = await db.request_sparepart.find_one_and_update(filt, {"$set": update})
+    if not doc:
+        raise HTTPException(400, "Request sudah direspon")
     updated = await db.request_sparepart.find_one({"req_id": req_id})
 
     if update.get("status") == "Ditolak":
@@ -215,12 +232,20 @@ async def beli_request(
     tidak ada dua kasir yang proses request yang sama bersamaan."""
     if actor_role != "kasir":
         raise HTTPException(403, "Hanya Kasir yang bisa mencatat pembelian")
+    if payload.barang_di_tangan and not (payload.tanggal_terima and payload.tanggal_terima.strip()):
+        raise HTTPException(status_code=400, detail="Tanggal terima wajib diisi kalau barang sudah di tangan")
 
     now = datetime.now(timezone.utc)
+    # Selalu mendarat di Menunggu_Barang dulu di sini, TIDAK langsung ke
+    # Diterima meski barang_di_tangan=True — supaya kalau _terima_barang
+    # gagal di tengah jalan (mis. gagal buat sparepart master), request-nya
+    # nyangkut di status hidup yang masih valid & bisa diulang lewat
+    # /terima, bukan diam-diam "Diterima" padahal efek inventorinya belum
+    # kejadian.
     doc = await db.request_sparepart.find_one_and_update(
         {"req_id": req_id, "status": "Menunggu_Pembelian", "cabang": actor_cabang},
         {"$set": {
-            "status": "Menunggu_Barang" if not payload.barang_di_tangan else "Diterima",
+            "status": "Menunggu_Barang",
             "supplier": payload.supplier,
             "harga_beli_aktual": payload.harga_beli_aktual,
             "bukti_url": payload.bukti_url,
@@ -241,7 +266,7 @@ async def beli_request(
     )
 
     if payload.barang_di_tangan:
-        return await _terima_barang(db, doc, tanggal_terima=payload.tanggal_terima, actor=actor)
+        return await _claim_and_terima_barang(db, req_id, actor_cabang, tanggal_terima=payload.tanggal_terima, actor=actor)
 
     return _fmt(doc)
 
@@ -255,6 +280,22 @@ async def terima_request(
     if actor_role != "kasir":
         raise HTTPException(403, "Hanya Kasir yang bisa konfirmasi barang diterima")
 
+    if payload.catatan:
+        doc = await db.request_sparepart.find_one({"req_id": req_id, "status": "Menunggu_Barang", "cabang": actor_cabang})
+        if doc:
+            await db.request_sparepart.update_one(
+                {"req_id": req_id},
+                {"$set": {"catatan_kc": (doc.get("catatan_kc") or "") + " | " + payload.catatan}}
+            )
+
+    return await _claim_and_terima_barang(db, req_id, actor_cabang, tanggal_terima=payload.tanggal_terima, actor=actor)
+
+
+async def _claim_and_terima_barang(db, req_id: str, actor_cabang: str, tanggal_terima: Optional[str], actor: str) -> RequestSparepartResponse:
+    """Klaim atomik dari Menunggu_Barang -> processing_terima, lalu jalankan
+    efek inventory. Kalau efeknya gagal di tengah jalan, status DIKEMBALIKAN
+    ke Menunggu_Barang (bukan nyangkut permanen di status transient yang
+    tidak ada di enum resmi) supaya kasir bisa coba ulang."""
     doc = await db.request_sparepart.find_one_and_update(
         {"req_id": req_id, "status": "Menunggu_Barang", "cabang": actor_cabang},
         {"$set": {"status": "processing_terima", "updated_at": datetime.now(timezone.utc)}},
@@ -263,10 +304,14 @@ async def terima_request(
     if not doc:
         raise HTTPException(409, "Request tidak dalam status Menunggu_Barang atau sudah diproses")
 
-    if payload.catatan:
-        doc["catatan_kc"] = (doc.get("catatan_kc") or "") + " | " + payload.catatan
-
-    return await _terima_barang(db, doc, tanggal_terima=payload.tanggal_terima, actor=actor)
+    try:
+        return await _terima_barang(db, doc, tanggal_terima=tanggal_terima, actor=actor)
+    except Exception:
+        await db.request_sparepart.update_one(
+            {"req_id": req_id, "status": "processing_terima"},
+            {"$set": {"status": "Menunggu_Barang", "updated_at": datetime.now(timezone.utc)}}
+        )
+        raise
 
 
 async def _terima_barang(db, doc: dict, tanggal_terima: Optional[str], actor: str) -> RequestSparepartResponse:
