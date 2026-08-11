@@ -5,9 +5,10 @@ from fastapi import HTTPException
 
 from app.schemas.sparepart import (
     SparepartCreateRequest, SparepartUpdateStokRequest, SparepartResponse,
-    DEFAULT_SPAREPART_JENIS,
+    SparepartInUseItem, DEFAULT_SPAREPART_JENIS,
 )
 from app.services.log_service import write_log
+from app.utils.formatters import fmt_waktu
 
 
 def _fmt(doc: dict) -> SparepartResponse:
@@ -130,3 +131,41 @@ async def update_stok(
     await write_log(db, actor, "Update Stok Sparepart",
         f"{sp_id} • {sp['nama']} {aksi} {abs(payload.delta)} → stok:{updated['stok']}", sp.get("cabang",""))
     return _fmt(updated)
+
+
+async def list_sparepart_in_use(
+    db: AsyncIOMotorDatabase,
+    cabang: Optional[str] = None,
+) -> List[SparepartInUseItem]:
+    """Sparepart 'Sedang Dipakai' — satu baris per sparepart_items entry di
+    setiap tiket servis yang masih Proses, dilengkapi info tiket/unit/teknisi.
+    Tidak menyentuh koleksi sparepart sama sekali (stoknya sudah dipotong
+    langsung saat use_sparepart, bukan di sini) — ini murni tampilan agregasi."""
+    query: dict = {"status": "Proses", "sparepart_items": {"$ne": []}}
+    if cabang:
+        query["cabang"] = cabang
+    tickets = await db.service.find(query).to_list(length=None)
+
+    result: List[SparepartInUseItem] = []
+    for ticket in tickets:
+        items = ticket.get("sparepart_items") or []
+        if not items:
+            continue
+        unit = await db.units.find_one({"unit_id": ticket.get("unit_id", "")}) if ticket.get("unit_id") else None
+        for item in items:
+            sp = await db.sparepart.find_one({"sp_id": item["sp_id"]})
+            mulai = item.get("mulai_pakai")
+            result.append(SparepartInUseItem(
+                sp_id=item["sp_id"],
+                nama=item.get("nama", ""),
+                kategori=sp.get("kategori", "") if sp else "",
+                harga_modal=item.get("harga_modal", item.get("harga_jual", 0)),
+                jumlah=item["jumlah"],
+                service_id=ticket.get("service_id", ""),
+                unit_label=ticket.get("unit_label", ""),
+                imei=unit.get("imei", "") if unit else "",
+                teknisi=ticket.get("teknisi", ""),
+                mulai_pakai=fmt_waktu(mulai) if isinstance(mulai, datetime) else mulai,
+                cabang=ticket.get("cabang", ""),
+            ))
+    return result

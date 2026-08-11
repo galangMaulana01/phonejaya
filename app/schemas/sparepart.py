@@ -80,3 +80,19 @@ class SparepartResponse(BaseModel):
     catatan:     str
     cabang:      str
     dimensi_str: str   # "12 x 5 x 10 cm" atau ""
+
+
+class SparepartInUseItem(BaseModel):
+    """Satu baris sparepart yang lagi 'Sedang Dipakai' — sparepart_items dari
+    satu tiket servis berstatus Proses, dilengkapi info tiket/unit/teknisi-nya."""
+    sp_id:        str
+    nama:         str
+    kategori:     str = ""
+    harga_modal:  int = 0
+    jumlah:       int
+    service_id:   str
+    unit_label:   str
+    imei:         str = ""
+    teknisi:      str
+    mulai_pakai:  Optional[str] = None
+    cabang:       str

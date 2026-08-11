@@ -23,6 +23,17 @@ async def list_sparepart(
     return ok([i.model_dump() for i in items])
 
 
+@router.get("/sedang-dipakai")
+async def list_sparepart_in_use(
+    cabang: Optional[str] = Query(None),
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_kasir_teknisi_or_owner),
+):
+    cab = cabang if user.get("role") == "owner" else user.get("cabang")
+    items = await sparepart_service.list_sparepart_in_use(db, cabang=cab)
+    return ok([i.model_dump() for i in items])
+
+
 @router.post("", status_code=201)
 async def create_sparepart(
     body: SparepartCreateRequest,

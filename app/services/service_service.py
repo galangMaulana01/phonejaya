@@ -148,18 +148,16 @@ async def update_service(
             )
 
         # Kalau Selesai → tambahkan biaya sparepart yang dipakai ke harga_modal
-        # unit (konvensi sama seperti approve_request di
-        # request_sparepart_service.py: delta = harga_jual x jumlah). Stoknya
-        # sendiri SUDAH dipotong atomik sejak teknisi memilihnya lewat
-        # use_sparepart — tidak ada lagi pengurangan stok di titik ini.
+        # unit. Pakai harga_modal yang di-SNAPSHOT saat teknisi memilihnya
+        # (bukan harga_jual/retail, dan bukan harga sparepart yang berlaku
+        # SEKARANG) — supaya biaya repair akurat terhadap harga beli part,
+        # dan tidak berubah retroaktif kalau harga sparepart di-edit setelah
+        # dipakai tapi sebelum tiket ditutup. Stoknya sendiri SUDAH dipotong
+        # atomik sejak use_sparepart — tidak ada lagi pengurangan stok di sini.
         if new_status == "Selesai":
             sp_items = doc.get("sparepart_items", [])
             if sp_items:
-                total_delta = 0
-                for item in sp_items:
-                    sp = await db.sparepart.find_one({"sp_id": item["sp_id"], "cabang": doc.get("cabang", "")})
-                    if sp:
-                        total_delta += sp.get("harga_jual", 0) * item["jumlah"]
+                total_delta = sum(item.get("harga_modal", item.get("harga_jual", 0)) * item["jumlah"] for item in sp_items)
                 if total_delta:
                     await db.units.update_one(
                         {"unit_id": doc["unit_id"]},
@@ -258,7 +256,7 @@ async def use_sparepart(
     else:
         items.append({
             "sp_id": sp["sp_id"], "nama": sp["nama"], "jumlah": payload.jumlah,
-            "harga_jual": sp.get("harga_jual", 0), "mulai_pakai": now,
+            "harga_modal": sp.get("harga_beli", 0), "mulai_pakai": now,
         })
     await db.service.update_one(
         {"service_id": service_id},
