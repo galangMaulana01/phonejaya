@@ -57,37 +57,36 @@ async def create_request(
     db, payload: RequestSparepartCreateRequest, actor: str
 ) -> RequestSparepartResponse:
     """
-    Teknisi create request sparepart untuk service tertentu.
+    Teknisi create request sparepart — either standalone (general restock,
+    no service_id) or tied to a service ticket they're currently handling.
     Validasi:
-    - service_id WAJIB untuk request baru
-    - service status = Proses atau Selesai (sudah dipegang teknisi)
-    - service.teknisi == actor (teknisi yang pegang)
-    - service.cabang == payload.cabang
+    - Kalau service_id diisi: service status = Proses atau Selesai (sudah
+      dipegang teknisi), service.teknisi == actor, service.cabang == payload.cabang
     - Kalau sp_id null (beli baru) -> product_link WAJIB
     """
-    # Validasi service_id wajib untuk request baru
-    if not payload.service_id or not payload.service_id.strip():
-        raise HTTPException(status_code=400, detail="Wajib pilih tiket servis yang berkaitan (service_id)")
+    svc = None
+    unit_id = None
+    if payload.service_id and payload.service_id.strip():
+        svc = await db.service.find_one({"service_id": payload.service_id})
+        if not svc:
+            raise HTTPException(status_code=404, detail=f"Service {payload.service_id} tidak ditemukan")
 
-    # Validasi service
-    svc = await db.service.find_one({"service_id": payload.service_id})
-    if not svc:
-        raise HTTPException(status_code=404, detail=f"Service {payload.service_id} tidak ditemukan")
+        if svc.get("status") not in ("Proses", "Selesai"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Service status {svc.get('status')} tidak bisa request sparepart. Harus Proses atau Selesai."
+            )
 
-    if svc.get("status") not in ("Proses", "Selesai"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Service status {svc.get('status')} tidak bisa request sparepart. Harus Proses atau Selesai."
-        )
+        if svc.get("teknisi") != actor:
+            raise HTTPException(
+                status_code=403,
+                detail="Hanya teknisi yang sedang mengerjakan service ini yang boleh request sparepart"
+            )
 
-    if svc.get("teknisi") != actor:
-        raise HTTPException(
-            status_code=403,
-            detail="Hanya teknisi yang sedang mengerjakan service ini yang boleh request sparepart"
-        )
+        if svc.get("cabang") != payload.cabang:
+            raise HTTPException(status_code=403, detail="Service bukan cabang Anda")
 
-    if svc.get("cabang") != payload.cabang:
-        raise HTTPException(status_code=403, detail="Service bukan cabang Anda")
+        unit_id = svc.get("unit_id")
 
     # Validasi product_link kalau beli baru (sp_id null)
     if not payload.sp_id and (not payload.product_link or not payload.product_link.strip()):
@@ -102,7 +101,6 @@ async def create_request(
     req_id = await _next_req_id(db)
     now = datetime.now(timezone.utc)
 
-    unit_id = svc.get("unit_id")
     unit_doc = None
     if unit_id:
         unit_doc = await db.units.find_one({"unit_id": unit_id})
@@ -127,7 +125,8 @@ async def create_request(
     res = await db.request_sparepart.insert_one(doc)
     doc["_id"] = res.inserted_id
 
-    await write_log(db, actor, "Request Sparepart", f"{req_id} • {payload.nama_sp} x{payload.jumlah} (Service: {payload.service_id})", payload.cabang)
+    service_note = f" (Service: {payload.service_id})" if payload.service_id else ""
+    await write_log(db, actor, "Request Sparepart", f"{req_id} • {payload.nama_sp} x{payload.jumlah}{service_note}", payload.cabang)
     return _fmt(doc)
 
 
