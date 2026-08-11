@@ -1,14 +1,14 @@
-from fastapi import APIRouter, Depends, Request, Query
+from fastapi import APIRouter, Depends, Query
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.database import get_db
 from app.schemas.request_sparepart import (
     RequestSparepartCreateRequest, RequestSparepartResponseRequest,
-    RequestSparepartApproveRequest
+    RequestSparepartBeliRequest, RequestSparepartTerimaRequest,
 )
 from app.schemas.common import ok
 from app.services.request_sparepart_service import (
-    list_requests, create_request, respond_request, approve_request, get_request_detail
+    list_requests, create_request, respond_request, beli_request, terima_request, get_request_detail
 )
 from app.middlewares.auth import require_kepala_or_owner, require_kasir, require_any
 
@@ -42,7 +42,7 @@ async def get_request(
     return ok(item.model_dump())
 
 
-# POST /request-sparepart - Create request (Teknisi only, must have service_id)
+# POST /request-sparepart - Create request (Teknisi only)
 @router.post("", status_code=201)
 async def buat_request(
     body: RequestSparepartCreateRequest,
@@ -59,7 +59,7 @@ async def buat_request(
     return ok(item.model_dump(), message=f"{item.req_id} berhasil diajukan")
 
 
-# PATCH /request-sparepart/{req_id}/respond - Kepala Cabang respond
+# PATCH /request-sparepart/{req_id}/respond - Kepala Cabang review & approve harga
 @router.patch("/{req_id}/respond")
 async def respon_request(
     req_id: str,
@@ -76,16 +76,33 @@ async def respon_request(
     return ok(item.model_dump(), message=f"Request {req_id} {item.status}")
 
 
-# PATCH /request-sparepart/{req_id}/approve - Kasir final approval
-@router.patch("/{req_id}/approve")
-async def approve_request_sparepart(
+# PATCH /request-sparepart/{req_id}/beli - Kasir catat pembelian
+@router.patch("/{req_id}/beli")
+async def catat_pembelian(
     req_id: str,
-    payload: RequestSparepartApproveRequest,
-    db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_any),
+    body:   RequestSparepartBeliRequest,
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_kasir),
 ):
-    item = await approve_request(
-        db, req_id, payload,
+    item = await beli_request(
+        db, req_id, body,
+        actor=user.get("name", user.get("username", "")),
+        actor_role=user.get("role", ""),
+        actor_cabang=user.get("cabang", ""),
+    )
+    return ok(item.model_dump(), message=f"Request {req_id} {item.status}")
+
+
+# PATCH /request-sparepart/{req_id}/terima - Kasir konfirmasi barang diterima & masuk inventory
+@router.patch("/{req_id}/terima")
+async def konfirmasi_terima(
+    req_id: str,
+    body:   RequestSparepartTerimaRequest,
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_kasir),
+):
+    item = await terima_request(
+        db, req_id, body,
         actor=user.get("name", user.get("username", "")),
         actor_role=user.get("role", ""),
         actor_cabang=user.get("cabang", ""),

@@ -110,10 +110,11 @@ async def update_service(
 
         # Validasi transisi status yang valid
         valid_transitions = {
-            "Antrian": ["Proses", "Ditolak"],
-            "Proses":  ["Selesai", "Ditolak"],
-            "Selesai": [],          # hanya bisa Approved lewat approve_repair
-            "Ditolak": [],
+            "Antrian":            ["Proses", "Ditolak"],
+            "Proses":             ["Selesai", "Ditolak"],
+            "Menunggu_Sparepart": ["Proses", "Ditolak"],  # manual recovery — request diajukan biasanya jadi sistem yang balikin
+            "Selesai":            [],          # hanya bisa Approved lewat approve_repair
+            "Ditolak":            [],
         }
         allowed = valid_transitions.get(current_status, [])
         if new_status not in allowed:
@@ -179,6 +180,15 @@ async def update_service(
         updates["foto_after_urls"] = payload.foto_after_urls
 
     if payload.estimasi_selesai:
+        # "Estimasi hanya setelah sparepart tersedia" — kalau tiket masih
+        # (atau baru mau pindah ke) Menunggu_Sparepart, teknisi belum pegang
+        # partnya jadi belum bisa kasih estimasi waktu selesai yang akurat.
+        blocked_status = updates.get("status", current_status)
+        if blocked_status == "Menunggu_Sparepart":
+            raise HTTPException(
+                status_code=400,
+                detail="Belum bisa isi estimasi selagi masih menunggu sparepart tiba."
+            )
         updates["estimasi_selesai"] = payload.estimasi_selesai
 
     if payload.teknisi is not None:

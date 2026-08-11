@@ -4,11 +4,12 @@ from enum import Enum
 
 
 class StatusServiceEnum(str, Enum):
-    antrian  = "Antrian"   # baru masuk dari kasir, belum diambil teknisi
-    proses   = "Proses"    # teknisi sedang kerjakan
-    selesai  = "Selesai"   # teknisi selesai, menunggu approval harga
-    approved = "Approved"  # kasir/owner sudah set harga → unit ke stok
-    ditolak  = "Ditolak"   # unit tidak bisa diperbaiki
+    antrian             = "Antrian"             # baru masuk dari kasir, belum diambil teknisi
+    proses              = "Proses"              # teknisi sedang kerjakan
+    menunggu_sparepart  = "Menunggu_Sparepart"   # teknisi lagi nunggu sparepart yang direquest tiba
+    selesai             = "Selesai"              # teknisi selesai, menunggu approval harga
+    approved            = "Approved"             # kasir/owner sudah set harga → unit ke stok
+    ditolak             = "Ditolak"              # unit tidak bisa diperbaiki
 
 
 class ServiceCreateRequest(BaseModel):
