@@ -1,13 +1,14 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 
 from app.schemas.request_sparepart import (
     RequestSparepartCreateRequest, RequestSparepartResponseRequest, RequestSparepartResponse,
-    RequestSparepartBeliRequest, RequestSparepartTerimaRequest,
+    RequestSparepartBeliRequest, RequestSparepartTerimaRequest, RequestSparepartNotifItem,
 )
 from app.services.log_service import write_log
+from app.services.sparepart import RIWAYAT_WINDOW_HOURS
 from app.utils.formatters import fmt_waktu
 
 
@@ -413,3 +414,31 @@ async def get_request_detail(db, req_id: str) -> RequestSparepartResponse:
     if not doc:
         raise HTTPException(404, f"Request {req_id} tidak ditemukan")
     return _fmt(doc)
+
+
+def _notif_query(teknisi_name: str) -> dict:
+    """Request milik teknisi ini yang baru diterima/direservasi dalam
+    RIWAYAT_WINDOW_HOURS terakhir — dasar notifikasi bell 'sparepart Anda
+    sudah tersedia'. Jendela waktu yang sama dipakai list_sparepart_riwayat
+    supaya keduanya konsisten: begitu satu berhenti tampil, yang lain juga."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=RIWAYAT_WINDOW_HOURS)
+    return {
+        "dibuat_oleh": teknisi_name,
+        "status": {"$in": ["Diterima", "Digunakan"]},
+        "diterima_at": {"$gte": cutoff},
+    }
+
+
+async def count_pending_notif_for_teknisi(db, teknisi_name: str) -> int:
+    return await db.request_sparepart.count_documents(_notif_query(teknisi_name))
+
+
+async def list_pending_notif_for_teknisi(db, teknisi_name: str) -> List[RequestSparepartNotifItem]:
+    docs = await db.request_sparepart.find(_notif_query(teknisi_name)).sort("diterima_at", -1).to_list(length=50)
+    return [
+        RequestSparepartNotifItem(
+            req_id=d["req_id"], nama_sp=d.get("nama_sp", ""), jumlah=d.get("jumlah", 1),
+            service_id=d.get("service_id"), unit_label=d.get("unit_nama_snapshot"),
+        )
+        for d in docs
+    ]

@@ -80,3 +80,6 @@ class ServiceResponse(BaseModel):
     foto_before_urls: List[str] = []
     foto_after_urls:  List[str] = []
     sparepart_items:  List[dict] = []
+    # Diisi sekali saat tiket pindah ke Selesai (kalau ada sparepart_items) —
+    # dasar window "Riwayat Pemakaian" (lihat sparepart.list_sparepart_riwayat).
+    sparepart_selesai_at: Optional[str] = None

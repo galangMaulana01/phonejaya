@@ -8,7 +8,8 @@ from app.schemas.request_sparepart import (
 )
 from app.schemas.common import ok
 from app.services.request_sparepart_service import (
-    list_requests, create_request, respond_request, beli_request, terima_request, get_request_detail
+    list_requests, create_request, respond_request, beli_request, terima_request, get_request_detail,
+    count_pending_notif_for_teknisi, list_pending_notif_for_teknisi,
 )
 from app.middlewares.auth import require_kepala_or_owner, require_kasir, require_any
 
@@ -24,6 +25,30 @@ async def get_requests(
 ):
     cab = None if user.get("role") == "owner" else user.get("cabang")
     items = await list_requests(db, cabang=cab, status=status)
+    return ok([i.model_dump() for i in items])
+
+
+# GET /request-sparepart/notif/count - Jumlah notifikasi belum dibaca teknisi
+# (request milik teknisi ini yang baru diterima/direservasi). Rute ini
+# HARUS didaftarkan sebelum /{req_id} di bawah supaya "notif" tidak
+# ketangkep sebagai path param — tapi karena "notif/count" 2 segmen dan
+# {req_id} cuma 1 segmen, keduanya tidak akan pernah tabrakan.
+@router.get("/notif/count")
+async def notif_count(
+    db:   AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_any),
+):
+    count = await count_pending_notif_for_teknisi(db, user.get("name", user.get("username", "")))
+    return ok({"count": count})
+
+
+# GET /request-sparepart/notif/pending - Daftar notifikasi buat panel bell
+@router.get("/notif/pending")
+async def notif_pending(
+    db:   AsyncIOMotorDatabase = Depends(get_db),
+    user: dict = Depends(require_any),
+):
+    items = await list_pending_notif_for_teknisi(db, user.get("name", user.get("username", "")))
     return ok([i.model_dump() for i in items])
 
 

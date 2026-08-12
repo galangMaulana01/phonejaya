@@ -35,6 +35,7 @@ def _fmt(doc: dict) -> ServiceResponse:
         foto_before_urls=doc.get("foto_before_urls") or [],
         foto_after_urls=doc.get("foto_after_urls") or [],
         sparepart_items=doc.get("sparepart_items") or [],
+        sparepart_selesai_at=fmt_waktu(doc["sparepart_selesai_at"]) if doc.get("sparepart_selesai_at") else None,
     )
 
 
@@ -178,6 +179,10 @@ async def update_service(
         if new_status == "Selesai":
             sp_items = doc.get("sparepart_items", [])
             if sp_items:
+                # Tandai kapan pemakaian sparepart tiket ini "selesai" — dasar
+                # window Riwayat Pemakaian (tampil sementara, lalu menghilang
+                # setelah RIWAYAT_WINDOW_HOURS).
+                updates["sparepart_selesai_at"] = updates["updated_at"]
                 total_delta = sum(item.get("harga_modal", item.get("harga_jual", 0)) * item["jumlah"] for item in sp_items)
                 if total_delta:
                     await db.units.update_one(

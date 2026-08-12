@@ -84,8 +84,10 @@ class SparepartResponse(BaseModel):
 
 
 class SparepartInUseItem(BaseModel):
-    """Satu baris sparepart yang lagi 'Sedang Dipakai' — sparepart_items dari
-    satu tiket servis berstatus Proses, dilengkapi info tiket/unit/teknisi-nya."""
+    """Satu baris sparepart — 'Sedang Dipakai' (sparepart_items dari tiket
+    servis yang masih Proses/Menunggu_Sparepart) atau 'Riwayat Pemakaian'
+    (dari tiket yang baru Selesai, tampil sementara — lihat
+    list_sparepart_riwayat). `selesai_pakai` cuma terisi untuk kasus kedua."""
     sp_id:        str
     nama:         str
     kategori:     str = ""
@@ -96,4 +98,5 @@ class SparepartInUseItem(BaseModel):
     imei:         str = ""
     teknisi:      str
     mulai_pakai:  Optional[str] = None
+    selesai_pakai: Optional[str] = None
     cabang:       str

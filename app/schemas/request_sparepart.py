@@ -181,3 +181,13 @@ class RequestSparepartResponse(BaseModel):
     harga_jual:       Optional[int] = None
     approved_by:      Optional[str] = None
     approved_at:      Optional[str] = None
+
+
+class RequestSparepartNotifItem(BaseModel):
+    """Ringkasan buat notifikasi teknisi: 'sparepart yang Anda minta sudah
+    diterima/direservasi'. Cuma field yang dibutuhkan bell notifikasi."""
+    req_id:      str
+    nama_sp:     str
+    jumlah:      int
+    service_id:  Optional[str] = None
+    unit_label:  Optional[str] = None

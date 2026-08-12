@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
@@ -9,6 +9,13 @@ from app.schemas.sparepart import (
 )
 from app.services.log_service import write_log
 from app.utils.formatters import fmt_waktu
+
+# Berapa lama sebuah tiket yang baru Selesai masih tampil di "Riwayat
+# Pemakaian" sebelum menghilang dari view itu (datanya sendiri tidak
+# terhapus — cuma tidak lagi ikut ke-query di sini setelah lewat jendela
+# ini). Dipakai juga oleh notifikasi teknisi (request_sparepart_service)
+# supaya jendela "baru selesai" konsisten di seluruh app.
+RIWAYAT_WINDOW_HOURS = 2
 
 
 def _fmt(doc: dict, dipakai: int = 0) -> SparepartResponse:
@@ -194,6 +201,49 @@ async def list_sparepart_in_use(
                 imei=unit.get("imei", "") if unit else "",
                 teknisi=ticket.get("teknisi", ""),
                 mulai_pakai=fmt_waktu(mulai) if isinstance(mulai, datetime) else mulai,
+                cabang=ticket.get("cabang", ""),
+            ))
+    return result
+
+
+async def list_sparepart_riwayat(
+    db: AsyncIOMotorDatabase,
+    cabang: Optional[str] = None,
+) -> List[SparepartInUseItem]:
+    """Sparepart 'Riwayat Pemakaian' — sparepart_items dari tiket yang BARU
+    Selesai (dalam RIWAYAT_WINDOW_HOURS terakhir), dengan badge "Selesai
+    Dipakai". Ini TRANSIEN sengaja: begitu lewat jendela waktu, baris ini
+    berhenti muncul di sini walau datanya tetap utuh di dokumen service —
+    bukan arsip permanen, cuma penanda "baru saja selesai dipakai"."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=RIWAYAT_WINDOW_HOURS)
+    query: dict = {"sparepart_selesai_at": {"$gte": cutoff}, "sparepart_items": {"$ne": []}}
+    if cabang:
+        query["cabang"] = cabang
+    tickets = await db.service.find(query).to_list(length=None)
+
+    result: List[SparepartInUseItem] = []
+    for ticket in tickets:
+        items = ticket.get("sparepart_items") or []
+        if not items:
+            continue
+        unit = await db.units.find_one({"unit_id": ticket.get("unit_id", "")}) if ticket.get("unit_id") else None
+        selesai = ticket.get("sparepart_selesai_at")
+        selesai_fmt = fmt_waktu(selesai) if isinstance(selesai, datetime) else selesai
+        for item in items:
+            sp = await db.sparepart.find_one({"sp_id": item["sp_id"]})
+            mulai = item.get("mulai_pakai")
+            result.append(SparepartInUseItem(
+                sp_id=item["sp_id"],
+                nama=item.get("nama", ""),
+                kategori=sp.get("kategori", "") if sp else "",
+                harga_modal=item.get("harga_modal", item.get("harga_jual", 0)),
+                jumlah=item["jumlah"],
+                service_id=ticket.get("service_id", ""),
+                unit_label=ticket.get("unit_label", ""),
+                imei=unit.get("imei", "") if unit else "",
+                teknisi=ticket.get("teknisi", ""),
+                mulai_pakai=fmt_waktu(mulai) if isinstance(mulai, datetime) else mulai,
+                selesai_pakai=selesai_fmt,
                 cabang=ticket.get("cabang", ""),
             ))
     return result
