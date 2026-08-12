@@ -71,7 +71,8 @@ class SparepartResponse(BaseModel):
     kategori:    str
     jenis:       str = DEFAULT_SPAREPART_JENIS
     satuan:      str
-    stok:        int
+    stok:        int          # sisa yang BEBAS — sudah dipotong tiap kali dipakai/direservasi
+    dipakai:     int = 0      # total sedang dipakai teknisi, dijumlahkan lintas tiket Proses/Menunggu_Sparepart
     harga_beli:  int
     harga_jual:  int
     dimensi_p:   Optional[float] = None

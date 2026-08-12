@@ -9,6 +9,7 @@ from app.utils.id_generator import next_trx_id
 from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
 from app.services.customer_service import create_customer
+from app.schemas.sparepart import DEFAULT_SPAREPART_JENIS
 
 
 def _fmt(doc: dict) -> TransaksiResponse:
@@ -116,6 +117,12 @@ async def create_transaksi(
                     raise HTTPException(status_code=404, detail=f"Sparepart {item.sp_id} tidak ditemukan")
                 if sp.get("cabang") != cabang:
                     raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
+                sp_jenis = sp.get("jenis") or DEFAULT_SPAREPART_JENIS
+                if sp_jenis != "dijual":
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{sp['nama']} bukan sparepart untuk dijual (jenis: {sp_jenis}) — sparepart repair hanya bisa dipakai lewat modul Service, equipment tidak dijual per-unit"
+                    )
 
                 # Atomic check-and-decrement to prevent race condition
                 result = await db.sparepart.find_one_and_update(
@@ -279,6 +286,12 @@ async def create_transaksi_sparepart(
             raise HTTPException(status_code=404, detail=f"Sparepart {item.sp_id} tidak ditemukan")
         if sp.get("cabang") != cabang:
             raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
+        sp_jenis = sp.get("jenis") or DEFAULT_SPAREPART_JENIS
+        if sp_jenis != "dijual":
+            raise HTTPException(
+                status_code=400,
+                detail=f"{sp['nama']} bukan sparepart untuk dijual (jenis: {sp_jenis})"
+            )
 
         # Atomic check-and-decrement to prevent race condition
         result = await db.sparepart.find_one_and_update(

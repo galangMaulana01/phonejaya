@@ -11,7 +11,7 @@ from app.services.log_service import write_log
 from app.utils.formatters import fmt_waktu
 
 
-def _fmt(doc: dict) -> SparepartResponse:
+def _fmt(doc: dict, dipakai: int = 0) -> SparepartResponse:
     p = doc.get("dimensi_p")
     l = doc.get("dimensi_l")
     t = doc.get("dimensi_t")
@@ -24,6 +24,7 @@ def _fmt(doc: dict) -> SparepartResponse:
         jenis       = doc.get("jenis") or DEFAULT_SPAREPART_JENIS,
         satuan      = doc.get("satuan", "pcs"),
         stok        = doc.get("stok", 0),
+        dipakai     = dipakai,
         harga_beli  = doc.get("harga_beli", 0),
         harga_jual  = doc.get("harga_jual", 0),
         dimensi_p   = p,
@@ -33,6 +34,26 @@ def _fmt(doc: dict) -> SparepartResponse:
         cabang      = doc.get("cabang", ""),
         dimensi_str = dim_str,
     )
+
+
+async def _dipakai_by_sp_id(db: AsyncIOMotorDatabase, cabang: Optional[str] = None) -> dict:
+    """Total sparepart_items.jumlah per sp_id, dijumlahkan lintas semua tiket
+    servis yang masih Proses/Menunggu_Sparepart — dipakai teknisi tapi belum
+    kelar. `stok` di dokumen sparepart HANYA merepresentasikan sisa yang
+    bebas (sudah dipotong atomik sejak dipakai); tanpa ini, satu-satunya cara
+    melihat berapa yang sedang dipakai adalah menjumlah manual satu-satu di
+    tab "Sedang Dipakai". Dihitung di Python (bukan aggregation pipeline)
+    supaya konsisten dengan list_sparepart_in_use dan tidak tergantung
+    dukungan $unwind/$group di mongomock (dev lokal)."""
+    query: dict = {"status": {"$in": ["Proses", "Menunggu_Sparepart"]}, "sparepart_items": {"$ne": []}}
+    if cabang:
+        query["cabang"] = cabang
+    tickets = await db.service.find(query).to_list(length=None)
+    totals: dict = {}
+    for ticket in tickets:
+        for item in ticket.get("sparepart_items") or []:
+            totals[item["sp_id"]] = totals.get(item["sp_id"], 0) + item["jumlah"]
+    return totals
 
 
 async def _next_sp_id(db: AsyncIOMotorDatabase) -> str:
@@ -60,7 +81,8 @@ async def list_sparepart(
         # "repair" so old stock isn't invisible in every jenis-filtered tab.
         query["jenis"] = jenis if jenis != DEFAULT_SPAREPART_JENIS else {"$in": [DEFAULT_SPAREPART_JENIS, None]}
     docs = await db.sparepart.find(query).sort("nama", 1).to_list(length=None)
-    return [_fmt(d) for d in docs]
+    dipakai_map = await _dipakai_by_sp_id(db, cabang)
+    return [_fmt(d, dipakai=dipakai_map.get(d.get("sp_id", ""), 0)) for d in docs]
 
 
 async def create_sparepart(
