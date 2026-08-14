@@ -30,7 +30,20 @@ async def list_service(
 ):
     cab = _cabang_filter(user, cabang)
     items = await service_service.list_service(db, cabang=cab, status=status, date_from=date_from, date_to=date_to, limit=limit)
-    return ok([i.model_dump() for i in items])
+    # Tabel Antrian teknisi menampilkan IMEI di kolom "HP/IMEI" — di-join di
+    # sini (bulk, satu query) daripada menambah field ke ServiceResponse,
+    # supaya schema list tetap ringan dan tidak dipakai endpoint lain.
+    unit_ids = [i.unit_id for i in items if i.unit_id]
+    units_by_id: dict = {}
+    if unit_ids:
+        async for u in db.units.find({"unit_id": {"$in": unit_ids}}, {"unit_id": 1, "imei": 1}):
+            units_by_id[u["unit_id"]] = u.get("imei", "")
+    dumped = []
+    for i in items:
+        d = i.model_dump()
+        d["imei"] = units_by_id.get(i.unit_id, "")
+        dumped.append(d)
+    return ok(dumped)
 
 
 @router.get("/riwayat")
