@@ -49,6 +49,7 @@ class UnitCreateRequest(BaseModel):
     storage:       str = "-"
     ram:           str = "-"
     warna:         str = "-"
+    kelengkapan:   str = "-"       # cth: "Dus, Casing" — bebas teks
     imei:          str = "-"       # IMEI 1 (wajib diisi di frontend)
     imei2:         str = "-"       # IMEI 2 opsional
     tipe_sim:      str = "Single SIM"   # Single SIM / Dual SIM / eSIM / WiFi Only
@@ -122,6 +123,7 @@ class UnitResponse(BaseModel):
     storage:       str
     ram:           str
     warna:         str
+    kelengkapan:   str = "-"
     imei:          str
     imei2:         str = "-"
     tipe_sim:      str = "Single SIM"

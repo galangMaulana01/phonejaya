@@ -3,15 +3,18 @@ from typing import Optional, Literal
 from enum import Enum
 
 
-# Alur baru (lihat diagram "ALUR TEKNISI – REQUEST SPAREPART & PEMAKAIAN"):
+# Alur baru (lihat diagram "WORKFLOW SERVICE & REQUEST SPAREPART"):
 # Pending -> [KC approve harga] -> Menunggu_Pembelian (audit: harga_disetujui
 #   terkunci di titik ini, tercatat sbg "Disetujui" lewat disetujui_at_kc)
 # -> [Kasir catat pembelian] -> Menunggu_Barang (audit: "Dibeli" tercatat
 #   lewat dibeli_at) — atau langsung Diterima kalau barang_di_tangan=True
-# -> [Kasir konfirmasi barang sampai] -> Diterima -> stok masuk inventory;
-#   kalau request terkait service_id (jenis repair), langsung auto-reserved
-#   ke tiket itu (status jadi Digunakan) sesuai keputusan bisnis: reservasi
-#   otomatis, tidak lewat pool "Tersedia" umum dulu.
+# -> [Kasir konfirmasi barang sampai] -> Diterima -> stok masuk inventory.
+#   Kalau request terkait service_id (jenis repair), part itu DITAHAN untuk
+#   tiket itu (tidak masuk pool "Tersedia" umum) tapi BELUM ditulis ke
+#   sparepart_items tiket — status tiket masih Menunggu_Sparepart, badge FE
+#   "Sparepart Tersedia" dihitung dari status Diterima ini. Baru saat teknisi
+#   eksplisit klik "Gunakan Sparepart" (request_sparepart_service.
+#   confirm_use_request) part itu ditulis ke tiket & status jadi Digunakan.
 # Ditolak bisa terjadi di titik KC review.
 class StatusRequestEnum(str, Enum):
     pending             = "Pending"
@@ -41,7 +44,11 @@ class RequestSparepartCreateRequest(BaseModel):
     sp_id:          Optional[str] = None
     nama_sp:        str
     jumlah:         int = 1
-    harga_diajukan: int
+    # Opsional saat dibuat — teknisi cuma perlu bilang butuh apa & kenapa.
+    # Kepala Cabang/Kasir yang mengisi harga & link produk belakangan kalau
+    # masih kosong, supaya teknisi tidak dipaksa tahu harga pasar sparepart
+    # selagi masih megang HP yang rusak.
+    harga_diajukan: Optional[int] = None
     alasan:         str
     keterangan:     str = ""
     cabang:         str = "JYP"
@@ -75,22 +82,22 @@ class RequestSparepartCreateRequest(BaseModel):
 
     @field_validator("harga_diajukan")
     @classmethod
-    def harga_diajukan_positive(cls, v: int) -> int:
-        if v <= 0:
+    def harga_diajukan_positive(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v <= 0:
             raise ValueError("Harga diajukan harus lebih dari 0")
         return v
 
     @field_validator("product_link")
     @classmethod
-    def validate_product_link(cls, v: Optional[str], info) -> Optional[str]:
-        sp_id = info.data.get("sp_id")
-        if sp_id is None or sp_id == "":
-            # sp_id kosong -> product_link wajib
-            if not v or not v.strip():
-                raise ValueError("Link produk wajib diisi jika sparepart belum ada di stok (sp_id kosong)")
-            v = v.strip()
-            if not v.startswith("https://"):
-                raise ValueError("Link produk harus menggunakan HTTPS")
+    def validate_product_link(cls, v: Optional[str]) -> Optional[str]:
+        # Tidak wajib lagi di sini walau sp_id kosong — Kasir masih bisa isi
+        # link produk belakangan pas mencatat pembelian. Kalau diisi, tetap
+        # harus HTTPS.
+        if v is None or not v.strip():
+            return None
+        v = v.strip()
+        if not v.startswith("https://"):
+            raise ValueError("Link produk harus menggunakan HTTPS")
         return v
 
 
@@ -133,6 +140,15 @@ class RequestSparepartBeliRequest(BaseModel):
         if v <= 0:
             raise ValueError("Harga beli aktual harus lebih dari 0")
         return v
+
+
+class RequestSparepartGunakanRequest(BaseModel):
+    """Teknisi konfirmasi 'Gunakan Sparepart'. estimasi_selesai cuma wajib
+    (dicek di service layer, bukan di sini) kalau ini request blocking
+    terakhir buat tiketnya — dibiarkan Optional di sini supaya konfirmasi
+    yang tidak langsung melepas tiket (masih ada request lain yang menahan)
+    tidak dipaksa mengisi estimasi yang belum relevan."""
+    estimasi_selesai: Optional[str] = None
 
 
 class RequestSparepartTerimaRequest(BaseModel):

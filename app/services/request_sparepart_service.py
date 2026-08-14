@@ -103,17 +103,32 @@ async def create_request(
         if not svc:
             raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
 
-        if svc.get("status") not in ("Proses", "Menunggu_Sparepart"):
-            # Sengaja TIDAK mengizinkan tiket "Selesai" lagi — begitu tiket
-            # Selesai, biaya sparepart sudah dijumlahkan sekali ke harga_modal
-            # unit (lihat update_service) dan tab "Sedang Dipakai" cuma
-            # menampilkan tiket berstatus Proses/Menunggu_Sparepart, jadi
-            # request yang masuk sesudahnya tidak akan pernah tertagih atau
-            # kelihatan lagi di manapun.
+        # "Antrian" diizinkan juga sekarang — teknisi bisa memutuskan
+        # "Request Sparepart" langsung dari layar Pilih Kebutuhan, sebelum
+        # tiket resmi masuk Proses (estimasi belum relevan di titik ini).
+        # Sengaja TIDAK mengizinkan tiket "Selesai" — begitu tiket Selesai,
+        # biaya sparepart sudah dijumlahkan sekali ke harga_modal unit (lihat
+        # update_service) dan tab "Sedang Dipakai" cuma menampilkan tiket
+        # berstatus Antrian/Proses/Menunggu_Sparepart, jadi request yang
+        # masuk sesudahnya tidak akan pernah tertagih atau kelihatan lagi di
+        # manapun.
+        if svc.get("status") not in ("Antrian", "Proses", "Menunggu_Sparepart"):
             raise HTTPException(
                 status_code=400,
-                detail=f"Service status {svc.get('status')} tidak bisa request sparepart. Harus Proses atau Menunggu_Sparepart."
+                detail=f"Service status {svc.get('status')} tidak bisa request sparepart. "
+                       f"Harus Antrian, Proses, atau Menunggu_Sparepart."
             )
+
+        # Klaim tiket "Antrian" yang belum punya teknisi begitu teknisi
+        # pertama membuka & memutuskan "Request Sparepart" — sama seperti
+        # auto-assign di update_service, tapi di sini bisa terjadi SEBELUM
+        # update_service(status=Proses) pertama kali dipanggil.
+        if not svc.get("teknisi") and actor.strip():
+            await db.service.update_one(
+                {"service_id": service_id, "teknisi": {"$in": [None, ""]}},
+                {"$set": {"teknisi": actor, "updated_at": datetime.now(timezone.utc)}}
+            )
+            svc["teknisi"] = actor
 
         if svc.get("teknisi") != actor:
             raise HTTPException(
@@ -126,9 +141,9 @@ async def create_request(
 
         unit_id = svc.get("unit_id")
 
-    # Validasi product_link kalau beli baru (sp_id null)
-    if not payload.sp_id and (not payload.product_link or not payload.product_link.strip()):
-        raise HTTPException(status_code=400, detail="Link produk wajib diisi jika sparepart belum ada di stok (sp_id kosong)")
+    # product_link tidak wajib lagi di sini (lihat schemas/request_sparepart.py)
+    # — teknisi cuma perlu bilang butuh apa & kenapa, Kasir masih bisa isi
+    # link belakangan pas mencatat pembelian kalau memang belum ada.
 
     # Validasi sparepart existing kalau sp_id terisi
     if payload.sp_id:
@@ -163,9 +178,9 @@ async def create_request(
     res = await db.request_sparepart.insert_one(doc)
     doc["_id"] = res.inserted_id
 
-    if service_id and payload.jenis == "repair" and svc and svc.get("status") == "Proses":
+    if service_id and payload.jenis == "repair" and svc and svc.get("status") in ("Antrian", "Proses"):
         await db.service.update_one(
-            {"service_id": service_id, "status": "Proses"},
+            {"service_id": service_id, "status": svc.get("status")},
             {"$set": {"status": "Menunggu_Sparepart", "updated_at": now}}
         )
 
@@ -317,10 +332,14 @@ async def _claim_and_terima_barang(db, req_id: str, actor_cabang: str, tanggal_t
 
 async def _terima_barang(db, doc: dict, tanggal_terima: Optional[str], actor: str) -> RequestSparepartResponse:
     """Barang diterima & masuk inventory. Kalau request terkait tiket service
-    (jenis repair, service_id ada), langsung auto-reserved ke tiket itu
-    ('Sedang Dipakai') — tidak lewat pool 'Tersedia' umum dulu, sesuai
-    keputusan bisnis: reservasi otomatis. Kalau tidak terkait tiket (restock
-    umum / equipment), masuk stok umum sparepart."""
+    (jenis repair, service_id ada), part-nya DITAHAN untuk tiket itu (tidak
+    ikut masuk pool 'Tersedia' umum) tapi TIDAK langsung ditulis ke
+    sparepart_items tiket — status request cuma jadi "Diterima" (dasar badge
+    FE "Sparepart Tersedia"). Penulisan ke tiket + status "Digunakan" baru
+    terjadi saat teknisi eksplisit konfirmasi lewat confirm_use_request —
+    supaya kasir 'terima barang' tidak diam-diam mengunci teknisi ke
+    keputusan pakai part itu. Kalau tidak terkait tiket (restock umum /
+    equipment), masuk stok umum sparepart seperti biasa."""
     from app.services.sparepart import create_sparepart
     from app.schemas.sparepart import SparepartCreateRequest
 
@@ -331,7 +350,7 @@ async def _terima_barang(db, doc: dict, tanggal_terima: Optional[str], actor: st
     jenis = doc.get("jenis") or "repair"
     harga_beli_aktual = doc.get("harga_beli_aktual", 0)
     jumlah = doc.get("jumlah", 1)
-    auto_reserve = bool(service_id) and jenis == "repair"
+    tied_to_ticket = bool(service_id) and jenis == "repair"
 
     sp_id = doc.get("sp_id")
     if sp_id:
@@ -341,9 +360,9 @@ async def _terima_barang(db, doc: dict, tanggal_terima: Optional[str], actor: st
 
     if existing_sp:
         # Sparepart sudah ada di master data: update harga_beli aktual, dan
-        # tambah stok HANYA kalau tidak langsung direservasi ke tiket.
+        # tambah stok HANYA kalau tidak ditahan buat satu tiket tertentu.
         set_fields = {"harga_beli": harga_beli_aktual, "updated_at": now}
-        if not auto_reserve:
+        if not tied_to_ticket:
             await db.sparepart.update_one(
                 {"sp_id": sp_id, "cabang": cabang},
                 {"$inc": {"stok": jumlah}, "$set": set_fields}
@@ -351,12 +370,12 @@ async def _terima_barang(db, doc: dict, tanggal_terima: Optional[str], actor: st
         else:
             await db.sparepart.update_one({"sp_id": sp_id, "cabang": cabang}, {"$set": set_fields})
     else:
-        # Sparepart baru: buat master data. Stok = 0 kalau langsung
-        # direservasi ke tiket (tidak masuk pool umum), atau = jumlah kalau
-        # restock/equipment biasa.
+        # Sparepart baru: buat master data. Stok = 0 kalau ditahan buat satu
+        # tiket (tidak masuk pool umum), atau = jumlah kalau restock/equipment
+        # biasa.
         new_sp = await create_sparepart(db, SparepartCreateRequest(
             nama=doc["nama_sp"], kategori="Sparepart", jenis=jenis, satuan="pcs",
-            stok=0 if auto_reserve else jumlah,
+            stok=0 if tied_to_ticket else jumlah,
             harga_beli=harga_beli_aktual, harga_jual=0,
             cabang=cabang, catatan=f"Auto-created from request {req_id}",
             product_link=doc.get("product_link"),
@@ -368,39 +387,99 @@ async def _terima_barang(db, doc: dict, tanggal_terima: Optional[str], actor: st
         "diterima_oleh": actor, "diterima_at": now,
         "tanggal_terima": tanggal_terima or fmt_waktu_date(now),
         "updated_at": now,
+        "status": "Diterima",
     }
-
-    if auto_reserve:
-        svc = await db.service.find_one({"service_id": service_id})
-        if svc:
-            items = svc.get("sparepart_items", [])
-            existing_item = next((i for i in items if i["sp_id"] == sp_id), None)
-            if existing_item:
-                existing_item["jumlah"] += jumlah
-            else:
-                items.append({
-                    "sp_id": sp_id, "nama": doc["nama_sp"], "jumlah": jumlah,
-                    "harga_modal": harga_beli_aktual, "mulai_pakai": now,
-                })
-            await db.service.update_one(
-                {"service_id": service_id},
-                {"$set": {"sparepart_items": items, "updated_at": now}}
-            )
-        final_update["status"] = "Digunakan"
-    else:
-        final_update["status"] = "Diterima"
-
     await db.request_sparepart.update_one({"req_id": req_id}, {"$set": final_update})
     updated = await db.request_sparepart.find_one({"req_id": req_id})
 
-    if auto_reserve:
-        await _clear_menunggu_sparepart_if_unblocked(db, service_id)
-
     await write_log(
         db, actor, "Barang Diterima - Sparepart",
-        f"{req_id} • {doc['nama_sp']} x{jumlah}" + (f" → auto-reserved ke {service_id}" if auto_reserve else " → stok umum"),
+        f"{req_id} • {doc['nama_sp']} x{jumlah}" + (f" → ditahan untuk tiket {service_id}" if tied_to_ticket else " → stok umum"),
         cabang
     )
+    return _fmt(updated)
+
+
+async def confirm_use_request(
+    db, req_id: str, actor: str, actor_role: str, estimasi_selesai: Optional[str] = None,
+) -> RequestSparepartResponse:
+    """Teknisi konfirmasi 'Gunakan Sparepart' — request yang sudah Diterima
+    (barang sudah ditahan buat tiket ini) baru DI TITIK INI ditulis ke
+    sparepart_items tiket & status jadi Digunakan. Lihat _terima_barang untuk
+    kenapa ini dipisah dari titik kasir menerima barang.
+
+    Kalau ini request BLOCKING TERAKHIR buat tiket ini, tiket ikut lepas dari
+    Menunggu_Sparepart balik ke Proses DI PANGGILAN YANG SAMA — dan estimasi
+    selesai WAJIB diisi persis di titik itu, sama seperti transisi
+    Antrian->Proses di update_service. Ini yang membuat estimasi selalu
+    terisi sebelum tiket benar-benar "Proses", di jalur manapun (4A/4C lewat
+    update_service, 4B lewat sini)."""
+    doc = await db.request_sparepart.find_one({"req_id": req_id})
+    if not doc:
+        raise HTTPException(404, f"Request {req_id} tidak ditemukan")
+    service_id = doc.get("service_id")
+    if doc.get("jenis") != "repair" or not service_id:
+        raise HTTPException(400, "Request ini tidak terkait tiket servis")
+
+    svc = await db.service.find_one({"service_id": service_id})
+    if not svc:
+        raise HTTPException(404, f"Service {service_id} tidak ditemukan")
+    if actor_role != "owner" and svc.get("teknisi") != actor:
+        raise HTTPException(403, "Hanya teknisi yang mengerjakan servis ini yang bisa konfirmasi pemakaian sparepart")
+    if doc.get("status") != "Diterima":
+        raise HTTPException(409, "Request belum berstatus Diterima, atau sudah dipakai/berubah")
+
+    # Estimasi WAJIB dicek SEBELUM mutasi apapun kalau ini akan melepas tiket
+    # dari Menunggu_Sparepart — supaya panggilan yang gagal karena belum isi
+    # estimasi tidak diam-diam "membakar" klaim request ini (lihat audit
+    # rollback-safety di update_service/beli_request untuk pola yang sama).
+    still_blocking = await db.request_sparepart.find_one({
+        "service_id": service_id, "jenis": "repair", "req_id": {"$ne": req_id},
+        "status": {"$nin": ["Diterima", "Digunakan", "Ditolak"]},
+    })
+    will_unblock = svc.get("status") == "Menunggu_Sparepart" and not still_blocking
+    if will_unblock and not estimasi_selesai:
+        raise HTTPException(
+            422,
+            "Sparepart terakhir yang ditunggu tiket ini — estimasi selesai wajib diisi "
+            "supaya tiket bisa lanjut ke Proses."
+        )
+
+    now = datetime.now(timezone.utc)
+    claimed = await db.request_sparepart.find_one_and_update(
+        {"req_id": req_id, "status": "Diterima"},
+        {"$set": {"status": "Digunakan", "updated_at": now}},
+        return_document=True,
+    )
+    if not claimed:
+        raise HTTPException(409, "Request belum berstatus Diterima, atau sudah dipakai/berubah")
+
+    sp_id = claimed.get("sp_id")
+    jumlah = claimed.get("jumlah", 1)
+    harga_modal = claimed.get("harga_beli_aktual", 0)
+    items = svc.get("sparepart_items", [])
+    existing_item = next((i for i in items if i["sp_id"] == sp_id), None)
+    if existing_item:
+        existing_item["jumlah"] += jumlah
+    else:
+        items.append({
+            "sp_id": sp_id, "nama": claimed.get("nama_sp", ""), "jumlah": jumlah,
+            "harga_modal": harga_modal, "mulai_pakai": now,
+        })
+    service_updates: dict = {"sparepart_items": items, "updated_at": now}
+    if will_unblock:
+        service_updates["status"] = "Proses"
+        service_updates["estimasi_selesai"] = estimasi_selesai
+
+    await db.service.update_one({"service_id": service_id}, {"$set": service_updates})
+
+    await write_log(
+        db, actor, "Gunakan Sparepart dari Request",
+        f"{req_id} • {claimed.get('nama_sp')} x{jumlah} → tiket {service_id}"
+        + (" (lanjut Proses)" if will_unblock else ""),
+        claimed.get("cabang", "")
+    )
+    updated = await db.request_sparepart.find_one({"req_id": req_id})
     return _fmt(updated)
 
 

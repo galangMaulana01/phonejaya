@@ -33,6 +33,20 @@ async def list_service(
     return ok([i.model_dump() for i in items])
 
 
+@router.get("/riwayat")
+async def service_riwayat(
+    cabang: Optional[str] = Query(None),
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_any),
+):
+    """Riwayat servis Selesai — sudut pandang tiket, tidak transien. Rute ini
+    HARUS terdaftar sebelum /{service_id} supaya "riwayat" tidak ketangkap
+    sebagai path param."""
+    cab = _cabang_filter(user, cabang)
+    items = await service_service.list_service_riwayat(db, cabang=cab)
+    return ok([i.model_dump() for i in items])
+
+
 @router.get("/pending-approval")
 async def pending_approval(
     cabang: Optional[str] = Query(None),
@@ -124,6 +138,14 @@ async def service_detail(
         raise HTTPException(status_code=403, detail="Bukan hak anda untuk melihat service ini")
     item = service_service._fmt(doc)
     data = item.model_dump()
+    # Layar detail read-only (Pilih HP) butuh warna/kondisi/kelengkapan unit —
+    # field itu tidak ada di ServiceResponse, jadi di-join manual di sini saja
+    # (bukan di list_service, supaya list tetap ringan).
+    unit = await db.units.find_one({"unit_id": doc.get("unit_id", "")}) if doc.get("unit_id") else None
+    data["warna"] = unit.get("warna", "-") if unit else "-"
+    data["kondisi"] = unit.get("kondisi", "-") if unit else "-"
+    data["kelengkapan"] = unit.get("kelengkapan", "-") if unit else "-"
+    data["imei"] = unit.get("imei", "-") if unit else "-"
     # Add timeline from status history if available
     data["timeline"] = []
     if doc.get("created_at"):

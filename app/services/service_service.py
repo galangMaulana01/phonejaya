@@ -227,6 +227,52 @@ async def update_service(
     return _fmt(updated)
 
 
+async def _claim_teknisi_if_unassigned(db, doc: dict, actor: str, actor_role: str) -> dict:
+    """Klaim tiket "Antrian" yang belum punya teknisi begitu teknisi pertama
+    menyentuhnya lewat use_sparepart/remove_sparepart/request sparepart —
+    perbanyakan dari auto-assign yang sudah ada di update_service, dibutuhkan
+    di sini karena sejak alur Pilih Kebutuhan, aksi-aksi itu bisa terjadi
+    SEBELUM update_service(status=Proses) pertama kali dipanggil."""
+    if doc.get("teknisi") or actor_role != "teknisi":
+        return doc
+    now = datetime.now(timezone.utc)
+    await db.service.update_one(
+        {"service_id": doc["service_id"], "teknisi": {"$in": [None, ""]}},
+        {"$set": {"teknisi": actor, "updated_at": now}}
+    )
+    doc["teknisi"] = actor
+    return doc
+
+
+async def list_service_riwayat(db, cabang: Optional[str] = None, limit: int = 200) -> List["ServiceRiwayatItem"]:
+    """Riwayat servis SUDAH SELESAI dari sudut pandang tiket — No.Service /
+    HP-IMEI / Sparepart / Harga Modal / Selesai / Status — TANPA jendela
+    waktu transien. Beda dari sparepart.list_sparepart_riwayat (sudut pandang
+    stok, hilang lagi setelah RIWAYAT_WINDOW_HOURS): ini arsip permanen milik
+    teknisi, service_id yang sudah Selesai tidak pernah hilang dari sini."""
+    from app.schemas.service import ServiceRiwayatItem
+    query: dict = {"status": "Selesai"}
+    if cabang:
+        query["cabang"] = cabang
+    docs = await db.service.find(query).sort("updated_at", -1).limit(limit).to_list(length=limit)
+    result: List[ServiceRiwayatItem] = []
+    for doc in docs:
+        unit = await db.units.find_one({"unit_id": doc.get("unit_id", "")}) if doc.get("unit_id") else None
+        items = doc.get("sparepart_items") or []
+        total = sum(item.get("harga_modal", item.get("harga_jual", 0)) * item["jumlah"] for item in items)
+        selesai = doc.get("sparepart_selesai_at") or doc.get("updated_at")
+        result.append(ServiceRiwayatItem(
+            service_id=doc.get("service_id") or "",
+            unit_label=doc.get("unit_label") or "",
+            imei=unit.get("imei", "") if unit else "",
+            sparepart_items=items,
+            harga_modal_total=total,
+            selesai_at=fmt_waktu(selesai) if isinstance(selesai, datetime) else selesai,
+            status=doc.get("status") or "",
+        ))
+    return result
+
+
 async def use_sparepart(
     db, service_id: str, payload: ServiceUseSparepartRequest, actor: str, actor_role: str,
 ) -> ServiceResponse:
@@ -241,10 +287,14 @@ async def use_sparepart(
     doc = await db.service.find_one({"service_id": service_id})
     if not doc:
         raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
+    doc = await _claim_teknisi_if_unassigned(db, doc, actor, actor_role)
     if actor_role != "owner" and doc.get("teknisi") != actor:
         raise HTTPException(status_code=403, detail="Hanya teknisi yang mengerjakan servis ini yang bisa pakai sparepart")
-    if doc.get("status") != "Proses":
-        raise HTTPException(status_code=400, detail="Sparepart hanya bisa dipakai selagi servis berstatus Proses")
+    # "Antrian" diizinkan juga — teknisi memilih sparepart dari stok di layar
+    # Pilih Kebutuhan, sebelum tiket resmi ditransisikan ke Proses (yang baru
+    # terjadi di layar Proses & Estimasi).
+    if doc.get("status") not in ("Antrian", "Proses"):
+        raise HTTPException(status_code=400, detail="Sparepart hanya bisa dipakai selagi servis berstatus Antrian atau Proses")
 
     cabang = doc.get("cabang", "")
     now = datetime.now(timezone.utc)
@@ -302,10 +352,11 @@ async def remove_sparepart(
     doc = await db.service.find_one({"service_id": service_id})
     if not doc:
         raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
+    doc = await _claim_teknisi_if_unassigned(db, doc, actor, actor_role)
     if actor_role != "owner" and doc.get("teknisi") != actor:
         raise HTTPException(status_code=403, detail="Hanya teknisi yang mengerjakan servis ini yang bisa mengubah pemakaian sparepart")
-    if doc.get("status") != "Proses":
-        raise HTTPException(status_code=400, detail="Pemakaian sparepart hanya bisa diubah selagi servis berstatus Proses")
+    if doc.get("status") not in ("Antrian", "Proses"):
+        raise HTTPException(status_code=400, detail="Pemakaian sparepart hanya bisa diubah selagi servis berstatus Antrian atau Proses")
 
     items = doc.get("sparepart_items", [])
     idx = next((i for i, it in enumerate(items) if it["sp_id"] == sp_id), None)

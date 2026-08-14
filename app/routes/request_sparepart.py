@@ -4,14 +4,14 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.config.database import get_db
 from app.schemas.request_sparepart import (
     RequestSparepartCreateRequest, RequestSparepartResponseRequest,
-    RequestSparepartBeliRequest, RequestSparepartTerimaRequest,
+    RequestSparepartBeliRequest, RequestSparepartTerimaRequest, RequestSparepartGunakanRequest,
 )
 from app.schemas.common import ok
 from app.services.request_sparepart_service import (
     list_requests, create_request, respond_request, beli_request, terima_request, get_request_detail,
-    count_pending_notif_for_teknisi, list_pending_notif_for_teknisi,
+    count_pending_notif_for_teknisi, list_pending_notif_for_teknisi, confirm_use_request,
 )
-from app.middlewares.auth import require_kepala_or_owner, require_kasir, require_any
+from app.middlewares.auth import require_kepala_or_owner, require_kasir, require_any, require_teknisi_or_owner
 
 router = APIRouter(prefix="/request-sparepart", tags=["Request Sparepart"])
 
@@ -116,6 +116,26 @@ async def catat_pembelian(
         actor_cabang=user.get("cabang", ""),
     )
     return ok(item.model_dump(), message=f"Request {req_id} {item.status}")
+
+
+# PATCH /request-sparepart/{req_id}/gunakan - Teknisi konfirmasi "Gunakan Sparepart"
+# (barang sudah Diterima/ditahan buat tiket ini -> baru di titik ini ditulis
+# ke sparepart_items tiket & tiket lepas dari Menunggu_Sparepart kalau tidak
+# ada request lain yang masih menahannya).
+@router.patch("/{req_id}/gunakan")
+async def gunakan_sparepart(
+    req_id: str,
+    body:   RequestSparepartGunakanRequest = RequestSparepartGunakanRequest(),
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_teknisi_or_owner),
+):
+    item = await confirm_use_request(
+        db, req_id,
+        actor=user.get("name", user.get("username", "")),
+        actor_role=user.get("role", ""),
+        estimasi_selesai=body.estimasi_selesai,
+    )
+    return ok(item.model_dump(), message=f"Sparepart {item.nama_sp} digunakan di tiket {item.service_id}")
 
 
 # PATCH /request-sparepart/{req_id}/terima - Kasir konfirmasi barang diterima & masuk inventory

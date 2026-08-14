@@ -83,3 +83,16 @@ class ServiceResponse(BaseModel):
     # Diisi sekali saat tiket pindah ke Selesai (kalau ada sparepart_items) —
     # dasar window "Riwayat Pemakaian" (lihat sparepart.list_sparepart_riwayat).
     sparepart_selesai_at: Optional[str] = None
+
+
+class ServiceRiwayatItem(BaseModel):
+    """Satu baris riwayat servis Selesai — No.Service/HP-IMEI/Sparepart/Harga
+    Modal/Selesai/Status. Beda dari sparepart_selesai_at yang cuma dasar
+    window transien: ini arsip permanen, tidak pernah hilang."""
+    service_id:        str
+    unit_label:        str
+    imei:              str = ""
+    sparepart_items:   List[dict] = []
+    harga_modal_total: int = 0
+    selesai_at:        Optional[str] = None
+    status:            str
