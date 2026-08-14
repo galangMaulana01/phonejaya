@@ -457,14 +457,6 @@ async def confirm_use_request(
             "Sparepart terakhir yang ditunggu tiket ini — estimasi selesai wajib diisi "
             "supaya tiket bisa lanjut ke Proses."
         )
-    # Sama seperti update_service: jangan biarkan tiket lolos ke Proses tanpa
-    # foto before, di jalur manapun yang membawanya ke Proses. Foto ini
-    # seharusnya sudah tersimpan dari layar "Pilih HP" (sebelum kebutuhan
-    # dipilih) — kalau belum ada, sesuatu yang salah lebih hulu, tolak di
-    # sini juga daripada diam-diam meloloskannya.
-    if will_unblock and not svc.get("foto_before_urls"):
-        raise HTTPException(422, "Foto kondisi HP sebelum dikerjakan wajib diupload sebelum mulai Proses")
-
     now = datetime.now(timezone.utc)
     claimed = await db.request_sparepart.find_one_and_update(
         {"req_id": req_id, "status": "Diterima"},

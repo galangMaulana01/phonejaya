@@ -157,17 +157,10 @@ async def update_service(
         if new_status == "Proses" and current_status in ("Antrian", "Menunggu_Sparepart") and not payload.estimasi_selesai:
             raise HTTPException(status_code=422, detail="Estimasi selesai wajib diisi saat mengubah status ke Proses")
 
-        # Foto before/after HANYA divalidasi di frontend sebelumnya — audit
-        # multi-role membuktikan langsung lewat API (bukan browser) status
-        # bisa lompat ke Proses/Selesai dengan foto kosong. Dicek terhadap
-        # dokumen yang SUDAH tersimpan digabung payload kali ini (bukan
-        # payload saja) supaya foto yang diupload di panggilan SEBELUMNYA
-        # (alur wizard: upload foto dulu, baru kirim status di panggilan
-        # berikutnya) tetap dihitung.
-        if new_status == "Proses" and current_status in ("Antrian", "Menunggu_Sparepart"):
-            has_before_photo = bool(payload.foto_before_urls or doc.get("foto_before_urls"))
-            if not has_before_photo:
-                raise HTTPException(status_code=422, detail="Foto kondisi HP sebelum dikerjakan wajib diupload sebelum mulai Proses")
+        # Foto AFTER masih divalidasi (lihat di bawah) — foto BEFORE sengaja
+        # tidak diwajibkan sama sekali: diagram alur klien tidak punya langkah
+        # upload foto di layar "Pilih HP", "Lanjut Proses" harus langsung ke
+        # "Pilih Kebutuhan" tanpa hambatan.
         if new_status == "Selesai":
             has_after_photo = bool(payload.foto_after_urls or doc.get("foto_after_urls"))
             if not has_after_photo:
