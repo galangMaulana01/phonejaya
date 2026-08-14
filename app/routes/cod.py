@@ -58,6 +58,7 @@ async def get_kurir_list(
 
 @router.get("", response_model=dict)
 async def list_cod_requests(
+    cabang: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     type: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None),
@@ -66,11 +67,16 @@ async def list_cod_requests(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
-    """List COD requests untuk Kasir/KC/Owner (filter by cabang)."""
-    cabang = user.get("cabang")
-    
+    """List COD requests untuk Kasir/KC/Owner. Non-owner selalu dikunci ke
+    cabang sendiri; owner boleh filter bebas (termasuk kosong = semua
+    cabang) — sebelumnya endpoint ini mengunci SEMUA role (termasuk owner)
+    ke user.cabang, beda sendiri dari endpoint list serupa lainnya
+    (units/service/dashboard/transfer-stok) yang konsisten membuka akses
+    lintas cabang untuk owner."""
+    cab = cabang if user.get("role") == "owner" else user.get("cabang")
+
     cods = await cod_service.list_cod_requests_all(
-        db, cabang, status, type, date_from, date_to, limit
+        db, cab, status, type, date_from, date_to, limit
     )
     return ok([c.model_dump() for c in cods])
 

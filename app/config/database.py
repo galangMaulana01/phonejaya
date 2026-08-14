@@ -49,44 +49,44 @@ async def close_db() -> None:
 
 
 async def init_db() -> None:
-    """Create unique indexes for data integrity."""
+    """Create unique indexes for data integrity.
+
+    Each index is created independently (own try/except) — this used to be
+    one straight-line sequence of awaits, which meant a single failure (e.g.
+    a unique index that can't build because duplicate values already exist
+    in that collection) raised out of init_db() and silently skipped EVERY
+    remaining index in the list, since app.main's startup warmup wraps the
+    whole call in a blanket try/except that only logs a warning. A multi-role
+    audit caught this: one dirty collection quietly left several unrelated
+    uniqueness guarantees (req_id, cod_id, transfer_id, customers) never
+    enforced. Now a bad collection only costs its own index."""
     client = get_client()
     db = client[settings.MONGO_DB]
-    
-    # Users collection - unique username
-    await db.users.create_index("username", unique=True)
-    
-    # Karyawan collection - unique username per cabang (or global)
-    await db.karyawan.create_index("username", unique=True)
-    
-    # Cabang collection - unique kode
-    await db.cabang.create_index("kode", unique=True)
-    
-    # Units collection - unique unit_id per cabang
-    await db.units.create_index([("unit_id", 1), ("cabang", 1)], unique=True)
-    
-    # Service collection - unique service_id
-    await db.service.create_index("service_id", unique=True)
-    
-    # Transaksi collection - unique trx_id
-    await db.transaksi.create_index("trx_id", unique=True)
-    
-    # Sparepart collection - unique sp_id
-    await db.sparepart.create_index("sp_id", unique=True)
-    
-    # Influencer videos - unique video_id
-    await db.influencer_videos.create_index("video_id", unique=True)
-    
-    # COD requests - unique cod_id
-    await db.cod_requests.create_index("cod_id", unique=True)
-    
-    # Transfer stok - unique transfer_id
-    await db.transfer_stok.create_index("transfer_id", unique=True)
-    
-    # Request sparepart - unique req_id
-    await db.request_sparepart.create_index("req_id", unique=True)
-    
-    # Customers - unique kontak per cabang (same kontak different cabang = allowed)
-    await db.customers.create_index([("kontak", 1), ("cabang", 1)], unique=True)
-    
-    logger.info("Database indexes created/verified")
+
+    index_specs = [
+        ("users", "username", {"unique": True}),
+        ("karyawan", "username", {"unique": True}),
+        ("cabang", "kode", {"unique": True}),
+        ("units", [("unit_id", 1), ("cabang", 1)], {"unique": True}),
+        ("service", "service_id", {"unique": True}),
+        ("transaksi", "trx_id", {"unique": True}),
+        ("sparepart", "sp_id", {"unique": True}),
+        ("influencer_videos", "video_id", {"unique": True}),
+        ("cod_requests", "cod_id", {"unique": True}),
+        ("transfer_stok", "transfer_id", {"unique": True}),
+        ("request_sparepart", "req_id", {"unique": True}),
+        ("customers", [("kontak", 1), ("cabang", 1)], {"unique": True}),
+    ]
+
+    failures = []
+    for collection_name, keys, options in index_specs:
+        try:
+            await db[collection_name].create_index(keys, **options)
+        except Exception as e:
+            failures.append(collection_name)
+            logger.error("Failed to create index on %s (%s): %s", collection_name, keys, e)
+
+    if failures:
+        logger.warning("Database indexes created with %d failure(s): %s", len(failures), ", ".join(failures))
+    else:
+        logger.info("Database indexes created/verified")

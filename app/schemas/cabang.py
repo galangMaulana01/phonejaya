@@ -49,8 +49,15 @@ class CabangUpdateRequest(BaseModel):
     @field_validator("nama")
     @classmethod
     def nama_length(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and len(v.strip()) > 100:
-            raise ValueError("Maksimal 100 karakter")
+        # Sengaja Optional (field ini opsional di PATCH), tapi kalau memang
+        # DIKIRIM harus tidak kosong — konfirmasi live: {"nama":""} diterima
+        # 200 dan mengosongkan nama cabang di seluruh UI. `None` (field tidak
+        # dikirim) tetap harus tetap lolos, cuma string kosong yang ditolak.
+        if v is not None:
+            if not v.strip():
+                raise ValueError("Nama tidak boleh kosong")
+            if len(v.strip()) > 100:
+                raise ValueError("Maksimal 100 karakter")
         return v
 
     @field_validator("timezone")
@@ -64,6 +71,17 @@ class AssignKepalaCabangRequest(BaseModel):
     nama:      str    # nama lengkap
     password:  str    # password login
     foto_profil_url: Optional[str] = None  # foto profil Kepala Cabang
+
+    @field_validator("username", "nama")
+    @classmethod
+    def not_empty(cls, v: str) -> str:
+        # Tidak ada validasi apapun sebelumnya — konfirmasi live:
+        # {"username":"", "nama":"Test", "password":"password123"} diterima
+        # 200 dan membuat akun users dengan username="" yang tidak bisa login.
+        # (password sudah divalidasi minimal 6 karakter di cabang_service.py.)
+        if not v.strip():
+            raise ValueError("Tidak boleh kosong")
+        return v.strip()
 
 
 class CabangResponse(BaseModel):

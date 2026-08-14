@@ -1,6 +1,8 @@
 from pydantic import BaseModel, field_validator
 from typing import Optional
 
+from app.schemas.common import MAX_RUPIAH
+
 # repair: dipakai teknisi buat perbaikan, nambah modal HP yang direpair.
 # dijual: dijual langsung ke customer lewat modul Transaksi, punya harga_jual sendiri.
 # equipment: alat kerja teknisi yang tidak habis pakai (bukan dipakai/dijual per-unit).
@@ -45,6 +47,8 @@ class SparepartCreateRequest(BaseModel):
     def non_negative(cls, v: int) -> int:
         if v < 0:
             raise ValueError("Nilai tidak boleh negatif")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Nilai tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
     @field_validator("product_link")
@@ -62,6 +66,18 @@ class SparepartUpdateStokRequest(BaseModel):
     """Tambah atau kurangi stok manual oleh owner."""
     delta:    int      # positif = tambah, negatif = kurangi
     catatan:  str = ""
+
+    @field_validator("delta")
+    @classmethod
+    def delta_bounded(cls, v: int) -> int:
+        # Tidak ada validasi apapun di sini sebelumnya — konfirmasi live:
+        # delta=99999999999999999999 diterima 200 dan menghasilkan stok yang
+        # tidak masuk akal. Dibatasi ke rentang yang sama dengan harga, bukan
+        # karena secara bisnis delta stok sebesar itu masuk akal, tapi supaya
+        # angka absurd gagal jadi 422 yang jelas, bukan korupsi data diam-diam.
+        if abs(v) > MAX_RUPIAH:
+            raise ValueError(f"Perubahan stok tidak boleh lebih dari {MAX_RUPIAH:,} (absolut)")
+        return v
 
 
 class SparepartResponse(BaseModel):

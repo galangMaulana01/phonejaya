@@ -172,7 +172,18 @@ async def create_cod_request(
         "items": items,
         "kasir_id": kasir_id,
         "kasir_name": kasir_name,
-        "kurir_id": payload.kurir_id if payload.type != "delivery" else None,
+        # Setiap pemakaian kurir_id lain di modul ini (accept/status/list,
+        # lihat app/routes/cod.py) adalah Mongo _id (`user.get("sub")`), BUKAN
+        # username — payload.kurir_id dari kasir (dipilih dari get_kurir_list,
+        # yang memang mengembalikan username) harus di-resolve ke _id user
+        # `kurir` yang sudah di-fetch di atas, supaya assignment manual untuk
+        # type=jual benar-benar cocok dengan identity yang dipakai kurir saat
+        # login. Menyimpan username langsung di sini membuat COD jual yang
+        # di-assign manual permanen tidak terjangkau oleh kurir-nya (audit
+        # multi-role menemukan ini). "beli"/"delivery" selalu broadcast
+        # (None) — payload.kurir_id yang mungkin ikut terkirim untuk tipe itu
+        # sengaja diabaikan.
+        "kurir_id": str(kurir["_id"]) if payload.type == "jual" and kurir else None,
         "kurir_name": kurir_name_val,
         "cabang": cabang,
         "status_history": status_history,

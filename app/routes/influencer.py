@@ -115,7 +115,10 @@ async def list_log(
     # Build query
     query = {"cabang": cabang}
     
-    # Date filter
+    # Date filter — malformed dates used to be silently swallowed (`except
+    # ValueError: pass`), so a typo'd date_from/date_to looked identical to
+    # "no filter" in the response with zero indication anything was wrong.
+    # Match GET /influencer/videos's behavior: fail loudly with a clean 400.
     if date_from and date_to:
         try:
             df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
@@ -124,7 +127,7 @@ async def list_log(
             dt = datetime.fromisoformat(date_to.replace("Z", "+00:00")) + timedelta(days=1)
             query["waktu"] = {"$gte": df, "$lte": dt}
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="Format date_from/date_to tidak valid")
     
     # Platform filter (regex match on aksi field since log doesn't have platform field yet)
     if platform:

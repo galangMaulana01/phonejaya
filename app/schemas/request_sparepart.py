@@ -2,6 +2,8 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, Literal
 from enum import Enum
 
+from app.schemas.common import MAX_RUPIAH
+
 
 # Alur baru (lihat diagram "WORKFLOW SERVICE & REQUEST SPAREPART"):
 # Pending -> [KC approve harga] -> Menunggu_Pembelian (audit: harga_disetujui
@@ -78,6 +80,8 @@ class RequestSparepartCreateRequest(BaseModel):
     def jumlah_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("Jumlah harus lebih dari 0")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Jumlah tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
     @field_validator("harga_diajukan")
@@ -85,6 +89,8 @@ class RequestSparepartCreateRequest(BaseModel):
     def harga_diajukan_positive(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and v <= 0:
             raise ValueError("Harga diajukan harus lebih dari 0")
+        if v is not None and v > MAX_RUPIAH:
+            raise ValueError(f"Harga diajukan tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
     @field_validator("product_link")
@@ -113,6 +119,8 @@ class RequestSparepartResponseRequest(BaseModel):
     def harga_disetujui_positive(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and v <= 0:
             raise ValueError("Harga disetujui harus lebih dari 0")
+        if v is not None and v > MAX_RUPIAH:
+            raise ValueError(f"Harga disetujui tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
 
@@ -139,6 +147,8 @@ class RequestSparepartBeliRequest(BaseModel):
     def harga_beli_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("Harga beli aktual harus lebih dari 0")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Harga beli aktual tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
 

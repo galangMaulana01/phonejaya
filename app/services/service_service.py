@@ -106,13 +106,22 @@ async def update_service(
 
     # "Estimasi hanya setelah sparepart tersedia" — kalau tiket SEDANG
     # Menunggu_Sparepart, teknisi belum pegang partnya jadi belum bisa kasih
-    # estimasi yang akurat. Dicek terhadap current_status (status SEBELUM
-    # request ini) dan HARUS di sini, sebelum mutasi apapun ke DB — kalau
-    # dicek setelah transisi status sudah di-commit (find_one_and_update di
-    # bawah), exception di titik itu tidak mem-rollback status yang sudah
-    # kepindah duluan, jadi tiketnya diam-diam lolos ke Proses tanpa
-    # estimasi walau responsnya error.
-    if payload.estimasi_selesai and current_status == "Menunggu_Sparepart":
+    # estimasi yang akurat. TAPI ini tidak berlaku kalau payload ini JUGA
+    # sekaligus memindahkan status ke Proses (override manual "lanjut tanpa
+    # sparepart ini") — di titik itu teknisi justru WAJIB kasih estimasi
+    # (lihat gate di bawah), jadi larangan ini hanya soal "isi estimasi
+    # sambil tetap diam di Menunggu_Sparepart", bukan larangan estimasi pada
+    # transisi keluar dari status itu. Dicek terhadap current_status (status
+    # SEBELUM request ini) dan HARUS di sini, sebelum mutasi apapun ke DB —
+    # kalau dicek setelah transisi status sudah di-commit (find_one_and_update
+    # di bawah), exception di titik itu tidak mem-rollback status yang sudah
+    # kepindah duluan, jadi tiketnya diam-diam lolos ke Proses tanpa estimasi
+    # walau responsnya error.
+    if (
+        payload.estimasi_selesai
+        and current_status == "Menunggu_Sparepart"
+        and payload.status != StatusServiceEnum.proses
+    ):
         raise HTTPException(
             status_code=400,
             detail="Belum bisa isi estimasi selagi masih menunggu sparepart tiba."
@@ -139,14 +148,30 @@ async def update_service(
                        f"Transisi yang diizinkan: {allowed if allowed else 'tidak ada'}"
             )
 
-        # Estimasi wajib diisi saat mulai kerjakan dari Antrian. Transisi
-        # Menunggu_Sparepart -> Proses ("lanjut tanpa sparepart ini") TIDAK
-        # boleh diwajibkan isi estimasi di sini juga — larangan estimasi
-        # selagi current_status Menunggu_Sparepart (di atas) akan langsung
-        # bertentangan dan membuat transisi ini mustahil dilakukan sama
-        # sekali kalau estimasi tetap diwajibkan pada saat bersamaan.
-        if new_status == "Proses" and current_status == "Antrian" and not payload.estimasi_selesai:
+        # Estimasi wajib diisi setiap kali tiket resmi mulai Proses — baik
+        # dari Antrian (jalur normal) MAUPUN dari Menunggu_Sparepart (override
+        # manual "lanjut tanpa sparepart ini"). Tanpa syarat yang sama di
+        # jalur override, teknisi bisa lolos ke Proses lalu ke Selesai tanpa
+        # estimasi pernah terisi sama sekali — audit multi-role menemukan ini
+        # sebagai bug nyata (tiket lolos approval pipeline tanpa estimasi).
+        if new_status == "Proses" and current_status in ("Antrian", "Menunggu_Sparepart") and not payload.estimasi_selesai:
             raise HTTPException(status_code=422, detail="Estimasi selesai wajib diisi saat mengubah status ke Proses")
+
+        # Foto before/after HANYA divalidasi di frontend sebelumnya — audit
+        # multi-role membuktikan langsung lewat API (bukan browser) status
+        # bisa lompat ke Proses/Selesai dengan foto kosong. Dicek terhadap
+        # dokumen yang SUDAH tersimpan digabung payload kali ini (bukan
+        # payload saja) supaya foto yang diupload di panggilan SEBELUMNYA
+        # (alur wizard: upload foto dulu, baru kirim status di panggilan
+        # berikutnya) tetap dihitung.
+        if new_status == "Proses" and current_status in ("Antrian", "Menunggu_Sparepart"):
+            has_before_photo = bool(payload.foto_before_urls or doc.get("foto_before_urls"))
+            if not has_before_photo:
+                raise HTTPException(status_code=422, detail="Foto kondisi HP sebelum dikerjakan wajib diupload sebelum mulai Proses")
+        if new_status == "Selesai":
+            has_after_photo = bool(payload.foto_after_urls or doc.get("foto_after_urls"))
+            if not has_after_photo:
+                raise HTTPException(status_code=422, detail="Foto kondisi HP setelah dikerjakan wajib diupload sebelum menandai Selesai")
 
         # Atomic claim on the transition: only one concurrent request can move
         # this ticket out of `current_status`. The loser gets a 409 instead of
@@ -161,6 +186,30 @@ async def update_service(
                 detail="Status service sudah berubah oleh proses lain, silakan refresh.",
             )
         updates["status"] = new_status
+
+        # Override manual Menunggu_Sparepart -> Proses ("lanjut tanpa
+        # sparepart ini"): request repair yang masih menggantung (belum
+        # Diterima/Digunakan/Ditolak) buat tiket ini TIDAK PUNYA gunanya lagi
+        # — kalau dibiarkan, KC/Kasir tetap bisa approve/beli/terima part
+        # yang tidak akan pernah dipakai (audit multi-role: request nyangkut
+        # permanen). Ditolak otomatis di sini, bukan dihapus, supaya tetap
+        # tercatat di riwayat kenapa statusnya berubah. Request yang SUDAH
+        # "Diterima" (barang fisik sudah ditahan buat tiket ini) sengaja
+        # TIDAK disentuh di sini — itu perlu intervensi kasir/KC untuk
+        # dikembalikan ke stok umum, bukan sesuatu yang aman dibatalkan
+        # otomatis begitu saja.
+        if current_status == "Menunggu_Sparepart" and new_status == "Proses":
+            await db.request_sparepart.update_many(
+                {
+                    "service_id": service_id, "jenis": "repair",
+                    "status": {"$nin": ["Diterima", "Digunakan", "Ditolak"]},
+                },
+                {"$set": {
+                    "status": "Ditolak",
+                    "catatan_kc": "Dibatalkan otomatis — teknisi melanjutkan servis tanpa sparepart ini.",
+                    "updated_at": updates["updated_at"],
+                }}
+            )
 
         # Kalau Ditolak → update unit kembali ke status khusus
         if new_status == "Ditolak":

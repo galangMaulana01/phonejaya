@@ -2,6 +2,8 @@ from pydantic import BaseModel, field_validator, HttpUrl
 from typing import Optional, List, Literal, Dict, Any
 from datetime import datetime
 
+from app.schemas.common import MAX_RUPIAH
+
 
 class CODRequestCreate(BaseModel):
     """Kasir buat COD request (Beli, Jual, atau Delivery)."""
@@ -45,6 +47,13 @@ class CODRequestCreate(BaseModel):
             raise ValueError("kurir_id wajib untuk type jual")
         return v
 
+    @field_validator("offer_price")
+    @classmethod
+    def offer_price_bounded(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and (v < 0 or v > MAX_RUPIAH):
+            raise ValueError(f"Harga tawaran harus antara 0 dan {MAX_RUPIAH:,}")
+        return v
+
 
 class CODStatusUpdate(BaseModel):
     """Kurir update status COD."""
@@ -70,6 +79,15 @@ class CODKurirSubmitBeli(BaseModel):
     """Kurir submit data HP setelah bertemu penjual (type=beli)."""
     deal_price: int  # harga jual yang disepakati
     unit_data: Dict[str, Any]  # {imei, merk, tipe, storage, ram, warna, kondisi_hp, battery, foto_url, ...}
+
+    @field_validator("deal_price")
+    @classmethod
+    def deal_price_bounded(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Deal price harus lebih dari 0")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Deal price tidak boleh lebih dari {MAX_RUPIAH:,}")
+        return v
 
 
 class CODRejectRequest(BaseModel):
@@ -161,4 +179,6 @@ class ApproveBeliRequest(BaseModel):
         kondisi_hp = unit_data.get("kondisi_hp", "Mulus")
         if kondisi_hp != "Repair" and v <= 0:
             raise ValueError("Harga jual wajib diisi untuk kondisi Mulus")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Harga jual tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v

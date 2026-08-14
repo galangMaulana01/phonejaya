@@ -5,6 +5,8 @@ from datetime import datetime
 import re
 from urllib.parse import urlparse
 
+from app.schemas.common import MAX_RUPIAH
+
 
 class SparepartItem(BaseModel):
     sp_id:  str
@@ -84,6 +86,8 @@ class UnitCreateRequest(BaseModel):
     def non_negative_price(cls, v: int) -> int:
         if v < 0:
             raise ValueError("Harga tidak boleh negatif")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Harga tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
 
@@ -101,6 +105,8 @@ class UnitUpdateRequest(BaseModel):
     def non_negative(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and v < 0:
             raise ValueError("Harga tidak boleh negatif")
+        if v is not None and v > MAX_RUPIAH:
+            raise ValueError(f"Harga tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
 
@@ -112,6 +118,8 @@ class ApproveRepairRequest(BaseModel):
     def positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("Harga jual harus lebih dari 0")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Harga jual tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
 

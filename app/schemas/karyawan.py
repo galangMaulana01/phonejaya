@@ -2,6 +2,8 @@ from pydantic import BaseModel, field_validator
 from typing import Optional
 import re
 
+from app.schemas.common import MAX_RUPIAH
+
 
 class KaryawanCreateRequest(BaseModel):
     nama:     str
@@ -26,6 +28,8 @@ class KaryawanCreateRequest(BaseModel):
     def gaji_non_negative(cls, v: int) -> int:
         if v < 0:
             raise ValueError("Gaji tidak boleh negatif")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Gaji tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
     @field_validator("jabatan")

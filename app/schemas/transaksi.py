@@ -1,6 +1,8 @@
 from pydantic import BaseModel, field_validator
 from typing import Optional, List
 
+from app.schemas.common import MAX_RUPIAH
+
 
 class TransaksiCreateRequest(BaseModel):
     """Transaksi gabungan: HP +/ sparepart."""
@@ -21,6 +23,8 @@ class TransaksiCreateRequest(BaseModel):
     def not_negative(cls, v: int) -> int:
         if v < 0:
             raise ValueError("Tidak boleh negatif")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
 

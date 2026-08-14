@@ -428,6 +428,19 @@ async def confirm_use_request(
         raise HTTPException(403, "Hanya teknisi yang mengerjakan servis ini yang bisa konfirmasi pemakaian sparepart")
     if doc.get("status") != "Diterima":
         raise HTTPException(409, "Request belum berstatus Diterima, atau sudah dipakai/berubah")
+    # Tiket bisa saja sudah lanjut/ditutup lewat jalur lain (mis. teknisi
+    # override manual Menunggu_Sparepart->Proses tanpa part ini, lalu tiket
+    # itu diselesaikan/di-approve) SEMENTARA request ini baru menyusul jadi
+    # Diterima belakangan — tanpa cek ini, part yang sudah dibayar bisa
+    # nyangkut nulis ke tiket yang sudah Selesai/Approved/Ditolak, harga
+    # modalnya tidak pernah ikut tertagih (bump harga_modal cuma jalan sekali
+    # persis di transisi ke Selesai) dan part itu jadi stok mati permanen.
+    if svc.get("status") not in ("Antrian", "Proses", "Menunggu_Sparepart"):
+        raise HTTPException(
+            400,
+            f"Tiket {service_id} sudah berstatus '{svc.get('status')}' — sparepart tidak bisa lagi "
+            f"digunakan di tiket ini. Hubungi kasir/kepala cabang untuk mengembalikan part ini ke stok umum."
+        )
 
     # Estimasi WAJIB dicek SEBELUM mutasi apapun kalau ini akan melepas tiket
     # dari Menunggu_Sparepart — supaya panggilan yang gagal karena belum isi
@@ -444,6 +457,13 @@ async def confirm_use_request(
             "Sparepart terakhir yang ditunggu tiket ini — estimasi selesai wajib diisi "
             "supaya tiket bisa lanjut ke Proses."
         )
+    # Sama seperti update_service: jangan biarkan tiket lolos ke Proses tanpa
+    # foto before, di jalur manapun yang membawanya ke Proses. Foto ini
+    # seharusnya sudah tersimpan dari layar "Pilih HP" (sebelum kebutuhan
+    # dipilih) — kalau belum ada, sesuatu yang salah lebih hulu, tolak di
+    # sini juga daripada diam-diam meloloskannya.
+    if will_unblock and not svc.get("foto_before_urls"):
+        raise HTTPException(422, "Foto kondisi HP sebelum dikerjakan wajib diupload sebelum mulai Proses")
 
     now = datetime.now(timezone.utc)
     claimed = await db.request_sparepart.find_one_and_update(
