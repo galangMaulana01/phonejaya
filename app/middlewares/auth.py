@@ -52,8 +52,8 @@ def require_kasir_teknisi_or_owner(current_user: dict = Depends(get_current_user
 
 
 def require_teknisi_or_owner(current_user: dict = Depends(get_current_user)) -> dict:
-    """Teknisi, Kurir, kepala_cabang, dan owner bisa akses."""
-    if current_user.get("role") not in ("owner", "kepala_cabang", "teknisi", "kurir"):
+    """Hanya teknisi dan owner yang boleh mengubah tiket service."""
+    if current_user.get("role") not in ("owner", "teknisi"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Akses ditolak")
     return current_user
 

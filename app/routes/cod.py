@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from app.config.database import get_db
 from app.schemas.cod import (
     CODRequestCreate, CODStatusUpdate, CODRequestResponse,
-    CODRequestList, CODRequestDetail, KurirListItem, ApproveBeliRequest
+    CODRequestList, CODRequestDetail, KurirListItem, ApproveBeliRequest, CODKurirInputStok
 )
 from app.schemas.common import ok
 from app.services import cod_service
@@ -94,6 +94,8 @@ async def get_cod_detail(
 async def kurir_dashboard(
     status: Optional[str] = Query(None),
     type: Optional[str] = Query(None),
+    limit: int = Query(25, ge=1, le=100),
+    skip: int = Query(0, ge=0),
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kurir),
 ):
@@ -105,7 +107,7 @@ async def kurir_dashboard(
     if not kurir_id or not cabang:
         raise HTTPException(status_code=400, detail="Data kurir tidak lengkap")
     
-    cods = await cod_service.list_cod_requests(db, cabang, kurir_id, kurir_name, status, type)
+    cods = await cod_service.list_cod_requests(db, cabang, kurir_id, kurir_name, status, type, limit=limit, skip=skip)
     return ok([c.model_dump() for c in cods])
 
 
@@ -119,7 +121,7 @@ async def kurir_accept(
     kurir_id = user.get("sub") or user.get("username")
     kurir_name = user.get("name") or user.get("username")
     
-    cod = await cod_service.update_cod_status(db, cod_id, "diterima", kurir_id, kurir_name)
+    cod = await cod_service.update_cod_status(db, cod_id, "diterima", kurir_id, kurir_name, cabang=user.get("cabang"))
     return ok(cod.model_dump(), message=f"COD {cod_id} diterima")
 
 
@@ -134,7 +136,7 @@ async def kurir_reject(
     kurir_id = user.get("sub") or user.get("username")
     kurir_name = user.get("name") or user.get("username")
     
-    cod = await cod_service.update_cod_status(db, cod_id, "ditolak", kurir_id, kurir_name, note)
+    cod = await cod_service.update_cod_status(db, cod_id, "ditolak", kurir_id, kurir_name, note, cabang=user.get("cabang"))
     return ok(cod.model_dump(), message=f"COD {cod_id} ditolak")
 
 
@@ -168,7 +170,7 @@ async def kurir_update_status(
     kurir_id = user.get("sub") or user.get("username")
     kurir_name = user.get("name") or user.get("username")
     
-    cod = await cod_service.update_cod_status(db, cod_id, payload.status, kurir_id, kurir_name, payload.note)
+    cod = await cod_service.update_cod_status(db, cod_id, payload.status, kurir_id, kurir_name, payload.note, cabang=user.get("cabang"))
     return ok(cod.model_dump(), message=f"Status COD {cod_id} diperbarui ke {payload.status}")
 
 
@@ -176,74 +178,17 @@ async def kurir_update_status(
 # INPUT STOK (Kurir) - Clone dari Kasir tapi tanpa harga
 # ════════════════════════════════════════════════════════════════
 
-@router.post("/kurir/input-stok", response_model=dict, status_code=201)
+@router.post("/kurir/input-stok", response_model=dict, status_code=410)
 async def kurir_input_stok(
-    payload: dict,  # Same as unit create but without harga
+    payload: CODKurirInputStok,
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kurir),
 ):
-    """Kurir input stok HP (tanpa harga). Serahkan ke Kasir untuk harga."""
-    kurir_id = user.get("sub") or user.get("username")
-    kurir_name = user.get("name") or user.get("username")
-    cabang = user.get("cabang")
-    
-    # Validasi required fields
-    required = ["imei", "merk", "tipe", "storage", "warna"]
-    for field in required:
-        if not payload.get(field):
-            raise HTTPException(status_code=400, detail=f"Field {field} wajib diisi")
-    
-    # Derive kat_kode and kondisi_kode from payload (with safe defaults)
-    kat_kode = payload.get("kat_kode", "AI")  # Default: Android
-    kondisi_kode = payload.get("kondisi_kode", "BN")  # Default: Normal
-    kondisi_hp = payload.get("kondisi_hp", "Mulus")
-    
-    # Generate unit_id with proper kat_kode
-    unit_id = await next_unit_id(db, kat_kode, kondisi_kode, cabang)
-    
-    now = datetime.now(timezone.utc)
-    doc = {
-        "unit_id": unit_id,
-        "merk": payload["merk"],
-        "tipe": payload["tipe"],
-        "storage": payload.get("storage", "-"),
-        "ram": payload.get("ram", "-"),
-        "warna": payload["warna"],
-        "imei": payload["imei"],
-        "imei2": "-",
-        "tipe_sim": "Single SIM",
-        "keamanan": "Tidak Ada",
-        "speaker": "Normal",
-        "lcd": "Original",
-        "harga_modal": 0,
-        "harga_jual": 0,
-        "kondisi": kondisi_kode,
-        "kondisi_hp": kondisi_hp,
-        "battery": payload.get("battery", 100),
-        "battery_health": 0,
-        "status": "Tersedia",
-        "kategori": resolve_kategori(kat_kode),
-        "catatan": payload.get("catatan", ""),
-        "cabang": cabang,
-        "locked": False,
-        "garansi_toko": 7,
-        "created_at": now,
-        "created_by": kurir_name,
-        "tgl_terjual": None,
-        "service_id": None,
-        "foto_url": payload.get("foto_url"),
-        "input_by_role": "Kurir",
-    }
-    
-    await db.units.insert_one(doc)
-    
-    await write_log(
-        db, kurir_id, "Input Stok (Kurir)",
-        f"Unit {unit_id} → {payload['merk']} {payload['tipe']} (tanpa harga)",
-        cabang
+    """Deprecated: stok hanya dapat dibuat dari approval COD Beli."""
+    raise HTTPException(
+        status_code=410,
+        detail="Endpoint input-stok sudah dihentikan. Gunakan submit-beli lalu approval kasir.",
     )
-    
-    return ok({"unit_id": unit_id}, message="Stok berhasil ditambahkan, serahkan ke Kasir untuk input harga")
 
 
 # ════════════════════════════════════════════════════════════════

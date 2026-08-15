@@ -77,6 +77,7 @@ async def update_service(
     service_id: str,
     payload: ServiceUpdateRequest,
     actor: str,
+    actor_id: str,
     actor_role: str,
     user_cabang: str = "",
 ) -> ServiceResponse:
@@ -88,6 +89,17 @@ async def update_service(
     if actor_role != "owner":
         if doc.get("cabang") != user_cabang:
             raise HTTPException(status_code=403, detail="Bukan hak anda untuk update service ini")
+
+    # Ownership baru memakai stable teknisi_id. Dokumen legacy yang hanya
+    # menyimpan nama dapat dimigrasi oleh teknisi dengan nama yang sama;
+    # nama berbeda tidak pernah boleh mengambil alih tiket.
+    if actor_role == "teknisi":
+        assigned_id = doc.get("teknisi_id")
+        assigned_name = doc.get("teknisi")
+        if assigned_id and assigned_id != actor_id:
+            raise HTTPException(status_code=403, detail="Tiket sudah diklaim teknisi lain")
+        if not assigned_id and assigned_name and assigned_name != actor:
+            raise HTTPException(status_code=403, detail="Tiket legacy tercatat untuk teknisi lain")
 
     # Approved hanya bisa lewat endpoint approve_repair
     if payload.status == StatusServiceEnum.approved:
@@ -104,6 +116,9 @@ async def update_service(
             detail="Tiket sudah Approved dan unit sudah masuk stok. Tidak bisa diubah."
         )
 
+    from app.utils.upload_urls import ensure_uploaded_assets
+    ensure_uploaded_assets(payload.foto_before_urls, "foto_before_urls")
+    ensure_uploaded_assets(payload.foto_after_urls, "foto_after_urls")
     updates: dict = {"updated_at": datetime.now(timezone.utc)}
 
     if payload.status is not None:
@@ -156,16 +171,27 @@ async def update_service(
     if payload.estimasi_selesai:
         updates["estimasi_selesai"] = payload.estimasi_selesai
 
-    if payload.teknisi is not None:
-        updates["teknisi"] = payload.teknisi
-    elif not doc.get("teknisi") and actor_role == "teknisi":
-        # Auto-assign teknisi yang pertama ambil
+    if actor_role == "teknisi":
+        # Client tidak pernah dapat memilih owner tiket. Ini juga memigrasikan
+        # record lama yang sebelumnya hanya menyimpan display name.
+        updates["teknisi_id"] = actor_id
         updates["teknisi"] = actor
+    elif payload.teknisi is not None:
+        updates["teknisi"] = payload.teknisi
 
     if payload.link_shopee is not None:
         updates["link_shopee"] = payload.link_shopee
 
-    await db.service.update_one({"service_id": service_id}, {"$set": updates})
+    claim_filter = {"service_id": service_id, "cabang": doc.get("cabang"), "status": current_status}
+    if actor_role == "teknisi":
+        claim_filter["$or"] = [
+            {"teknisi_id": actor_id},
+            {"teknisi_id": None},
+            {"teknisi_id": {"$exists": False}},
+        ]
+    result = await db.service.update_one(claim_filter, {"$set": updates})
+    if not result.modified_count:
+        raise HTTPException(status_code=409, detail="Tiket sudah diubah atau diklaim teknisi lain")
     updated = await db.service.find_one({"service_id": service_id})
 
     await write_log(

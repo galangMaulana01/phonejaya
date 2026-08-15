@@ -70,6 +70,8 @@ async def create_cod_request(
 ) -> CODRequestResponse:
     """Kasir buat request COD (Beli, Jual, atau Delivery)."""
     
+    from app.utils.upload_urls import ensure_uploaded_asset
+    ensure_uploaded_asset(payload.screenshot_url, "screenshot_url")
     kurir = None
     kurir_name_val = None
     
@@ -88,7 +90,28 @@ async def create_cod_request(
         if not kurir:
             raise HTTPException(status_code=404, detail="Kurir tidak ditemukan atau tidak aktif di cabang Anda")
         kurir_name_val = kurir.get("name", payload.kurir_id)
-    
+
+    # COD Jual bukan jalur untuk membuat transaksi baru. Wajib ada transaksi
+    # unit yang sudah diklaim kasir, pada cabang yang sama, sehingga hubungan
+    # cod → transaksi → unit bersifat tunggal dan dapat diaudit.
+    if payload.type == "jual":
+        if not payload.trx_id or not payload.unit_id:
+            raise HTTPException(status_code=422, detail="trx_id dan unit_id wajib untuk COD Jual")
+        trx = await db.transaksi.find_one({"trx_id": payload.trx_id, "cabang": cabang})
+        if not trx:
+            raise HTTPException(status_code=404, detail="Transaksi COD Jual tidak ditemukan di cabang Anda")
+        if trx.get("unit_id") != payload.unit_id:
+            raise HTTPException(status_code=422, detail="Unit COD Jual harus sama dengan unit pada transaksi")
+        unit = await db.units.find_one({"unit_id": payload.unit_id, "cabang": cabang})
+        if not unit or unit.get("status") != "Sold":
+            raise HTTPException(status_code=409, detail="Unit COD Jual harus sudah berstatus Sold pada transaksi yang sama")
+        used = await db.cod_requests.find_one({
+            "type": "jual", "trx_id": payload.trx_id,
+            "status": {"$nin": ["ditolak", "gagal", "transaksi_berhasil"]},
+        })
+        if used:
+            raise HTTPException(status_code=409, detail=f"Transaksi sudah terikat COD Jual aktif ({used['cod_id']})")
+
     cod_id = await next_cod_id(db, cabang)
     now = datetime.now(timezone.utc)
     
@@ -148,9 +171,11 @@ async def create_cod_request(
         product_name = payload.product_name or trx.get("unit_label", "") or f"{len(items)} item"
         offer_price = payload.offer_price or trx.get("harga_jual", 0)
     else:
-        trx_id_val = payload.trx_id  # backward compat: bisa diisi untuk beli/jual juga
+        trx_id_val = payload.trx_id
         product_name = payload.product_name
         offer_price = payload.offer_price
+        if payload.type == "jual":
+            product_name = product_name or f"COD Jual {payload.unit_id}"
     
     doc = {
         "cod_id": cod_id,
@@ -167,6 +192,7 @@ async def create_cod_request(
         "location_lng": payload.location_lng,
         "wa_number": payload.wa_number,
         "trx_id": trx_id_val,
+        "unit_id": payload.unit_id if payload.type == "jual" else None,
         "delivery_address": delivery_address,
         "wa_customer": wa_customer,
         "items": items,
@@ -198,7 +224,8 @@ async def update_cod_status(
     new_status: str,
     actor: str,
     actor_name: str,
-    note: Optional[str] = None
+    note: Optional[str] = None,
+    cabang: Optional[str] = None,
 ) -> CODRequestResponse:
     """Update status COD. Two paths:
     1. Delivery broadcast accept: atomic claim (kurir_id was None, now assigned)
@@ -214,6 +241,7 @@ async def update_cod_status(
             {
                 "cod_id": cod_id,
                 "status": "menunggu_kurir",
+                **({"cabang": cabang} if cabang else {}),
                 "$or": [
                     {"kurir_id": None},
                     {"kurir_id": {"$exists": False}}
@@ -248,7 +276,7 @@ async def update_cod_status(
         # If result is None, fall through to path 2 (might be manual-assign accept)
     
     # ── PATH 2: Flow-validated + atomic status update ──
-    doc = await db.cod_requests.find_one({"cod_id": cod_id})
+    doc = await db.cod_requests.find_one({"cod_id": cod_id, **({"cabang": cabang} if cabang else {})})
     if not doc:
         raise HTTPException(status_code=404, detail="COD Request tidak ditemukan")
     
@@ -260,8 +288,11 @@ async def update_cod_status(
     current = doc["status"]
     flow = ALL_FLOWS[doc["type"]]
     
-    # Idempotency: if same status, return current doc without error
+    # Idempotency: same request returns current result, except an interrupted
+    # delivery rollback which must be resumed safely by the assigned courier.
     if new_status == current:
+        if doc["type"] == "delivery" and current == "gagal" and doc.get("rollback_state") != "completed":
+            return await _rollback_delivery_failure(db, doc, actor, actor_name, note)
         return _format_cod_response(doc)
     
     if new_status not in flow.get(current, []):
@@ -269,10 +300,15 @@ async def update_cod_status(
             status_code=400, 
             detail=f"Transisi status dari '{current}' ke '{new_status}' tidak diizinkan untuk tipe {doc['type']}"
         )
+
+    if doc["type"] == "jual" and new_status == "transaksi_berhasil":
+        return await _complete_cod_jual(db, doc, actor, actor_name, note)
+    if doc["type"] == "delivery" and new_status == "gagal":
+        return await _rollback_delivery_failure(db, doc, actor, actor_name, note)
     
     # Atomic update with status filter to prevent race
     update_result = await db.cod_requests.find_one_and_update(
-        {"cod_id": cod_id, "status": current},
+        {"cod_id": cod_id, "cabang": doc.get("cabang"), "kurir_id": actor, "status": current},
         {"$set": {
             "status": new_status,
             "updated_at": now
@@ -300,13 +336,106 @@ async def update_cod_status(
     return _format_cod_response(doc)
 
 
+async def _complete_cod_jual(
+    db: AsyncIOMotorDatabase, doc: dict, actor: str, actor_name: str, note: Optional[str]
+) -> CODRequestResponse:
+    """Finalize COD Jual exactly once against its existing sale transaction."""
+    trx_id, unit_id, cabang = doc.get("trx_id"), doc.get("unit_id"), doc.get("cabang")
+    if not trx_id or not unit_id:
+        raise HTTPException(status_code=409, detail="COD Jual legacy tidak memiliki relasi transaksi dan unit yang lengkap")
+    trx = await db.transaksi.find_one({"trx_id": trx_id, "cabang": cabang})
+    unit = await db.units.find_one({"unit_id": unit_id, "cabang": cabang})
+    if not trx or trx.get("unit_id") != unit_id or not unit or unit.get("status") != "Sold":
+        raise HTTPException(status_code=409, detail="Invariant COD Jual gagal: transaksi dan unit tidak lagi konsisten")
+    linked = trx.get("cod_id")
+    if linked and linked != doc["cod_id"]:
+        raise HTTPException(status_code=409, detail="Transaksi sudah diselesaikan oleh COD lain")
+
+    now = datetime.now(timezone.utc)
+    # Penjualan sudah dicatat pada transaksi; penyelesaian COD hanya menandai
+    # fulfillment dari transaksi yang sama, bukan menciptakan transaksi kedua.
+    linked_result = await db.transaksi.update_one(
+        {"trx_id": trx_id, "cabang": cabang, "$or": [{"cod_id": None}, {"cod_id": {"$exists": False}}, {"cod_id": doc["cod_id"]}]},
+        {"$set": {"cod_id": doc["cod_id"], "cod_status": "transaksi_berhasil", "fulfillment_status": "completed", "fulfilled_at": now}},
+    )
+    if not linked_result.matched_count:
+        raise HTTPException(status_code=409, detail="Transaksi sudah dikaitkan ke COD lain")
+    completed = await db.cod_requests.find_one_and_update(
+        {"cod_id": doc["cod_id"], "cabang": cabang, "kurir_id": actor, "status": "kurir_sedang_transaksi"},
+        {"$set": {"status": "transaksi_berhasil", "completed_trx_id": trx_id, "completed_unit_id": unit_id, "updated_at": now},
+         "$push": {"status_history": {"status": "transaksi_berhasil", "by": actor, "by_name": actor_name, "at": now, "note": note or "Transaksi dan unit telah direkonsiliasi"}}},
+        return_document=True,
+    )
+    if not completed:
+        # Request ganda aman: transaksi tetap menunjuk COD yang sama; caller
+        # menerima konflik agar tidak menganggap submit kedua sebagai proses baru.
+        raise HTTPException(status_code=409, detail="COD Jual sudah berubah status, coba muat ulang")
+    await write_log(db, actor, "Selesai COD Jual", f"{doc['cod_id']} → {trx_id} → {unit_id}", cabang)
+    return _format_cod_response(completed)
+
+
+async def _rollback_delivery_failure(
+    db: AsyncIOMotorDatabase, doc: dict, actor: str, actor_name: str, note: Optional[str]
+) -> CODRequestResponse:
+    """Compensate a failed delivery once; retries resume an unfinished rollback."""
+    if not doc.get("trx_id"):
+        raise HTTPException(status_code=409, detail="COD Delivery tidak memiliki transaksi untuk di-rollback")
+    now = datetime.now(timezone.utc)
+    claimed = await db.cod_requests.find_one_and_update(
+        {"cod_id": doc["cod_id"], "cabang": doc["cabang"], "kurir_id": actor, "status": "sedang_diantar"},
+        {"$set": {"status": "gagal", "rollback_state": "processing", "updated_at": now},
+         "$push": {"status_history": {"status": "gagal", "by": actor, "by_name": actor_name, "at": now, "note": note or "Delivery gagal; rollback transaksi dimulai"}}},
+        return_document=True,
+    )
+    if not claimed:
+        # Retry only resumes the rollback owned by the same courier.
+        claimed = await db.cod_requests.find_one({"cod_id": doc["cod_id"], "cabang": doc["cabang"], "kurir_id": actor, "status": "gagal", "rollback_state": {"$in": ["processing", "failed"]}})
+        if not claimed:
+            raise HTTPException(status_code=409, detail="COD Delivery tidak dapat di-rollback pada status ini")
+
+    trx = await db.transaksi.find_one({"trx_id": claimed["trx_id"], "cabang": claimed["cabang"]})
+    if not trx:
+        await db.cod_requests.update_one({"cod_id": claimed["cod_id"]}, {"$set": {"rollback_state": "failed", "rollback_error": "Transaksi tidak ditemukan"}})
+        raise HTTPException(status_code=409, detail="Transaksi delivery tidak ditemukan")
+
+    # Conditional transaction claim prevents duplicate stock restoration on
+    # duplicate submit/concurrent retry.
+    transition = await db.transaksi.update_one(
+        {"_id": trx["_id"], "$or": [{"fulfillment_status": {"$exists": False}}, {"fulfillment_status": {"$nin": ["rolled_back", "cancelled"]}}]},
+        {"$set": {"fulfillment_status": "rolled_back", "cod_status": "gagal", "cancelled_at": now, "cancelled_by_cod": claimed["cod_id"]}},
+    )
+    if transition.modified_count:
+        if trx.get("unit_id"):
+            await db.units.update_one(
+                {"unit_id": trx["unit_id"], "cabang": claimed["cabang"], "status": "Sold"},
+                {"$set": {"status": "Tersedia", "tgl_terjual": None, "updated_at": now, "rollback_cod_id": claimed["cod_id"]}},
+            )
+        for item in trx.get("sp_items") or []:
+            qty = item.get("jumlah", 0)
+            if qty > 0:
+                await db.sparepart.update_one(
+                    {"sp_id": item.get("sp_id"), "cabang": claimed["cabang"]},
+                    {"$inc": {"stok": qty}, "$set": {"updated_at": now, "rollback_cod_id": claimed["cod_id"]}},
+                )
+
+    await db.cod_requests.update_one(
+        {"cod_id": claimed["cod_id"], "status": "gagal"},
+        {"$set": {"rollback_state": "completed", "rolled_back_at": now}},
+    )
+    completed = await db.cod_requests.find_one({"cod_id": claimed["cod_id"]})
+    await write_log(db, actor, "Rollback COD Delivery", f"{claimed['cod_id']} → {claimed['trx_id']}", claimed["cabang"])
+    return _format_cod_response(completed)
+
+
 async def list_cod_requests(
     db: AsyncIOMotorDatabase,
     cabang: str,
     kurir_id: str,
     kurir_name: str,
     status: Optional[str] = None,
-    type_filter: Optional[str] = None
+    type_filter: Optional[str] = None,
+    limit: int = 25,
+    skip: int = 0,
 ) -> List[CODRequestList]:
     """Dashboard Kurir: list COD assigned ke kurir ini + broadcast delivery."""
     
@@ -322,8 +451,8 @@ async def list_cod_requests(
     if type_filter:
         query["type"] = type_filter
     
-    cursor = db.cod_requests.find(query).sort("created_at", -1).limit(100)
-    docs = await cursor.to_list(length=100)
+    cursor = db.cod_requests.find(query).sort("created_at", -1).skip(skip).limit(limit)
+    docs = await cursor.to_list(length=limit)
     
     return [_format_dashboard_item(d) for d in docs]
 
@@ -396,6 +525,7 @@ async def get_cod_detail(
         offer_price=doc.get("offer_price"),
         product_link=doc.get("product_link"),
         trx_id=doc.get("trx_id") or doc.get("transaksi_id"),  # backward compat
+        unit_id=doc.get("unit_id"),
         delivery_address=doc.get("delivery_address"),
         wa_customer=doc.get("wa_customer"),
         items=doc.get("items"),
@@ -671,6 +801,8 @@ async def submit_kurir_beli(
     unit_data: dict,
 ) -> CODRequestResponse:
     """Kurir submit data HP setelah bertemu penjual (type=beli)."""
+    from app.utils.upload_urls import ensure_uploaded_asset
+    ensure_uploaded_asset(unit_data.get("foto_url"), "foto_url")
     now = datetime.now(timezone.utc)
     
     doc = await db.cod_requests.find_one_and_update(

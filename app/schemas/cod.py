@@ -26,6 +26,8 @@ class CODRequestCreate(BaseModel):
     
     # Type = delivery fields
     trx_id: Optional[str] = None
+    # COD Jual harus menunjuk transaksi unit yang sudah dicatat kasir.
+    unit_id: Optional[str] = None
     delivery_address: Optional[str] = None
     wa_customer: Optional[str] = None
     
@@ -44,6 +46,23 @@ class CODRequestCreate(BaseModel):
         if cod_type == "jual" and not v:
             raise ValueError("kurir_id wajib untuk type jual")
         return v
+
+
+class CODKurirInputStok(BaseModel):
+    """Jalur legacy: hanya menyelesaikan COD Beli milik kurir yang valid."""
+    cod_id: str
+    imei: str
+    merk: str
+    tipe: str
+    storage: str = "-"
+    ram: str = "-"
+    warna: str = "-"
+    battery: int = 100
+    kondisi_hp: str = "Mulus"
+    kondisi_kode: str = "BN"
+    kat_kode: str = "AI"
+    catatan: str = ""
+    foto_url: Optional[str] = None
 
 
 class CODStatusUpdate(BaseModel):
@@ -111,6 +130,8 @@ class CODRequestDetail(BaseModel):
     offer_price: Optional[int] = None
     product_link: Optional[str] = None
     trx_id: Optional[str] = None
+    # COD Jual harus menunjuk transaksi unit yang sudah dicatat kasir.
+    unit_id: Optional[str] = None
     delivery_address: Optional[str] = None
     wa_customer: Optional[str] = None
     items: Optional[List[dict]] = None
@@ -143,8 +164,8 @@ class CODRequestResponse(BaseModel):
 
 class ApproveBeliRequest(BaseModel):
     """Request kasir approve COD beli - full unit data edit."""
-    harga_jual: int = 0
     unit_data: Dict[str, Any]
+    harga_jual: int = 0
     garansi_toko: int = 7
     catatan: str = ""
 

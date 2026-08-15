@@ -1,6 +1,8 @@
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
+from bson import ObjectId
+from bson.errors import InvalidId
 from datetime import datetime, timezone
 from app.schemas.transaksi import (
     TransaksiCreateRequest, TransaksiSparepartRequest, TransaksiResponse
@@ -63,6 +65,8 @@ async def create_transaksi(
 
     if not has_unit and not has_sp:
         raise HTTPException(status_code=422, detail="Pilih minimal 1 unit atau sparepart")
+    from app.utils.upload_urls import ensure_uploaded_asset
+    ensure_uploaded_asset(payload.foto_serah_terima, "foto_serah_terima")
 
     unit = None
     unit_label_parts = []
@@ -141,40 +145,44 @@ async def create_transaksi(
     customer_type = payload.customer_type if payload.customer_type in ["member", "guest"] else "member"
     customer_id = None
     customer_doc = None
-    poin_dipakai = 0
+    poin_dipakai = max(0, poin_dipakai)
     poin_baru = 0
     harga_jual_final = 0
 
     if customer_type == "member":
-        # ── Member flow: auto-create/find customer, points, verification ──
-        if payload.customer_nama and payload.customer_nama.strip():
-            customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
+        # Stable customer_id is authoritative. Legacy clients may omit it,
+        # then only a branch-scoped contact can be used for matching; a name
+        # alone must never select or debit somebody else's points.
+        if payload.customer_id:
+            try:
+                customer_doc = await db.customers.find_one({"_id": ObjectId(payload.customer_id), "cabang": cabang})
+            except InvalidId:
+                raise HTTPException(status_code=422, detail="customer_id tidak valid")
+            if not customer_doc:
+                raise HTTPException(status_code=404, detail="Customer tidak ditemukan di cabang Anda")
+            customer_id = str(customer_doc["_id"])
+        elif payload.customer_kontak and payload.customer_kontak.strip():
+            customer_doc = await db.customers.find_one({"kontak": payload.customer_kontak.strip(), "cabang": cabang})
             if customer_doc:
                 customer_id = str(customer_doc["_id"])
-            else:
-                new_customer = await create_customer(db,
-                                __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
-                                    nama=payload.customer_nama.strip(),
-                                    kontak=payload.customer_kontak.strip() if payload.customer_kontak else "",
-                                    cabang=cabang
-                                ),
-                                actor_id=kasir_name,
-                                actor_name=kasir_name,
-                                actor_role="kasir",
-                                cabang=cabang
-                            )
+            elif payload.customer_nama and payload.customer_nama.strip():
+                new_customer = await create_customer(
+                    db,
+                    __import__("app.schemas.customer", fromlist=["CustomerCreateRequest"]).CustomerCreateRequest(
+                        nama=payload.customer_nama.strip(), kontak=payload.customer_kontak.strip(), cabang=cabang
+                    ),
+                    actor_id=kasir_name, actor_name=kasir_name, actor_role="kasir", cabang=cabang,
+                )
                 customer_id = new_customer.id
-                customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
+                customer_doc = await db.customers.find_one({"_id": ObjectId(customer_id), "cabang": cabang})
+        elif payload.customer_nama and payload.customer_nama.strip():
+            raise HTTPException(status_code=422, detail="Kontak atau customer_id wajib untuk transaksi member")
 
-        # Points logic for member
-        trx_id = await next_trx_id(db)
+        poin_dipakai = max(0, poin_dipakai)
         if customer_doc and poin_dipakai > 0:
             customer_status = customer_doc.get("status", "Pending")
             if customer_status != "Verified":
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Customer status {customer_status}: hanya customer Verified yang bisa klaim poin"
-                )
+                raise HTTPException(status_code=400, detail=f"Customer status {customer_status}: hanya customer Verified yang bisa klaim poin")
             if poin_dipakai > customer_doc.get("points", 0):
                 raise HTTPException(status_code=400, detail="Poin customer tidak cukup")
             diskon_poin = poin_dipakai * 1000
@@ -185,14 +193,12 @@ async def create_transaksi(
             harga_jual_final = harga_jual_base
 
         poin_baru = int(harga_jual_final // 100000)
-
         if customer_doc:
             net_poin = -poin_dipakai + poin_baru
-            if net_poin != 0:
-                await db.customers.update_one(
-                    {"_id": customer_doc["_id"]},
-                    {"$inc": {"points": net_poin}}
-                )
+            if net_poin:
+                # ID + cabang conditional update keeps the debit bound to the
+                # selected record even if a same-named customer exists.
+                await db.customers.update_one({"_id": customer_doc["_id"], "cabang": cabang}, {"$inc": {"points": net_poin}})
     else:
         # ── Guest flow: no customer creation, no points, no verification ──
         customer_type = "guest"

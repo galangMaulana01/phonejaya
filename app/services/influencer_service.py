@@ -471,7 +471,8 @@ async def list_influencers(db: AsyncIOMotorDatabase) -> List[dict]:
     """List semua influencer untuk dropdown filter owner."""
     users = await db.users.find({"role": "influencer", "aktif": True}).to_list(length=None)
     return [
-        {"influencer_id": u["username"], "name": u.get("name", ""), "cabang": u.get("cabang", "")}
+        # Videos store the stable JWT subject/ObjectId, not username.
+        {"influencer_id": str(u["_id"]), "name": u.get("name", ""), "username": u.get("username", ""), "cabang": u.get("cabang", "")}
         for u in users
     ]
 

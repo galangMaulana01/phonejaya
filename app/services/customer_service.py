@@ -296,10 +296,13 @@ async def resubmit_customer(
     actor_id: str,
     actor_name: str,
     actor_role: str,
+    actor_cabang: Optional[str] = None,
 ) -> CustomerResponse:
     doc = await db.customers.find_one({"_id": ObjectId(customer_id)})
     if not doc:
         raise HTTPException(404, "Customer tidak ditemukan")
+    if actor_role != "owner" and doc.get("cabang") != actor_cabang:
+        raise HTTPException(403, "Customer bukan milik cabang Anda")
 
     current_status = doc.get("status", "Pending")
     await _validate_transition(current_status, "Pending", actor_role)

@@ -106,6 +106,7 @@ async def resubmit_customer(
         actor_id=user.get("sub", ""),
         actor_name=user.get("name", user.get("username", "")),
         actor_role=user.get("role", ""),
+        actor_cabang=user.get("cabang"),
     )
     return ok(item.model_dump(), message=f"Customer {item.nama} diajukan ulang")
 

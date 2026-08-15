@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List
 
 
@@ -12,6 +12,7 @@ class TransaksiCreateRequest(BaseModel):
     biaya_garansi: int = 0     # 0 atau 100000
     customer_nama: str = ""
     customer_kontak: str = ""
+    customer_id: Optional[str] = None
     poin_dipakai: int = 0
     sparepart_items: Optional[List["SparepartTrxItem"]] = None  # list sparepart yang dibeli
     foto_serah_terima: Optional[str] = None
@@ -21,11 +22,25 @@ class SparepartTrxItem(BaseModel):
     sp_id:   str
     jumlah:  int = 1
 
+    @field_validator("jumlah")
+    @classmethod
+    def jumlah_positif(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("Jumlah sparepart minimal 1")
+        return value
+
 
 class TransaksiSparepartItem(BaseModel):
     """Legacy — dipertahankan untuk backward compat."""
     sp_id:   str
     jumlah:  int = 1
+
+    @field_validator("jumlah")
+    @classmethod
+    def jumlah_positif(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("Jumlah sparepart minimal 1")
+        return value
 
 
 class TransaksiSparepartRequest(BaseModel):

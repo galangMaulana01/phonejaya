@@ -39,6 +39,7 @@ class ServiceUpdateRequest(BaseModel):
     status:            Optional[StatusServiceEnum] = None
     catatan_kerusakan: Optional[str] = None
     teknisi:           Optional[str] = None
+    teknisi_id:        Optional[str] = None
     estimasi_selesai:  Optional[str] = None
     foto_before_urls:  Optional[List[str]] = None
     foto_after_urls:   Optional[List[str]] = None
