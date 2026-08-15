@@ -12,7 +12,7 @@ from app.schemas.common import ok
 from app.services import cod_service
 from app.services.log_service import write_log
 from app.utils.id_generator import next_unit_id, resolve_kategori
-from app.middlewares.auth import get_current_user, require_kasir_teknisi_or_owner, require_kurir, require_kepala_or_owner
+from app.middlewares.auth import get_current_user, require_kasir_kepala_or_owner, require_kurir, require_kepala_or_owner
 
 router = APIRouter(prefix="/cod", tags=["COD"])
 
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/cod", tags=["COD"])
 async def create_cod_request(
     payload: CODRequestCreate,
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_teknisi_or_owner),
+    user: dict = Depends(require_kasir_kepala_or_owner),
 ):
     """Kasir buat request COD (Beli/Jual/Delivery)."""
     kasir_id = user.get("sub") or user.get("username")
@@ -44,7 +44,7 @@ async def create_cod_request(
 @router.get("/kurir-list", response_model=dict)
 async def get_kurir_list(
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_teknisi_or_owner),
+    user: dict = Depends(require_kasir_kepala_or_owner),
 ):
     """List kurir aktif di cabang (untuk dropdown)."""
     cabang = user.get("cabang")
@@ -63,7 +63,7 @@ async def list_cod_requests(
     date_to: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_teknisi_or_owner),
+    user: dict = Depends(require_kasir_kepala_or_owner),
 ):
     """List COD requests untuk Kasir/KC/Owner (filter by cabang)."""
     cabang = user.get("cabang")
@@ -78,7 +78,7 @@ async def list_cod_requests(
 async def get_cod_detail(
     cod_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_teknisi_or_owner),
+    user: dict = Depends(require_kasir_kepala_or_owner),
 ):
     """Detail COD request."""
     cabang = None if user.get("role") == "owner" else user.get("cabang")
@@ -224,7 +224,7 @@ async def approve_beli(
     cod_id: str,
     body: ApproveBeliRequest,
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_teknisi_or_owner),
+    user: dict = Depends(require_kasir_kepala_or_owner),
 ):
     """Kasir approve COD beli — unit masuk inventory/teknisi."""
     kasir_name = user.get("name") or user.get("username")
@@ -240,7 +240,7 @@ async def reject_beli(
     cod_id: str,
     payload: dict,
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kasir_teknisi_or_owner),
+    user: dict = Depends(require_kasir_kepala_or_owner),
 ):
     """Kasir reject COD beli dengan alasan."""
     kasir_name = user.get("name") or user.get("username")

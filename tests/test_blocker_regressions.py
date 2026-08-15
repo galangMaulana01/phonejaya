@@ -1,7 +1,7 @@
 import unittest
 from fastapi import HTTPException
 
-from app.middlewares.auth import require_teknisi_or_owner
+from app.middlewares.auth import require_kasir_kepala_or_owner, require_teknisi_or_owner
 from app.schemas.transaksi import SparepartTrxItem, TransaksiSparepartItem
 from app.utils.upload_urls import ensure_uploaded_asset
 
@@ -16,6 +16,11 @@ class BlockerRegressionTests(unittest.TestCase):
     def test_kurir_cannot_use_teknisi_guard(self):
         with self.assertRaises(HTTPException) as exc:
             require_teknisi_or_owner({"role": "kurir"})
+        self.assertEqual(exc.exception.status_code, 403)
+
+    def test_teknisi_cannot_use_cod_financial_guard(self):
+        with self.assertRaises(HTTPException) as exc:
+            require_kasir_kepala_or_owner({"role": "teknisi"})
         self.assertEqual(exc.exception.status_code, 403)
 
     def test_only_storage_url_is_accepted_as_evidence(self):
