@@ -102,6 +102,11 @@ async def get_karyawan_stats(
         days    = hari or 30
         dt_from = now - timedelta(days=days)
         dt_to   = now
+    # date_to (whether from the query param or defaulted to `now`) is a bare day
+    # boundary — push the *query* upper bound to the start of the next day so
+    # today's entries aren't excluded by a midnight-of-today $lte. dt_to itself
+    # stays as the real period end for display and the rata-per-hari divisor.
+    query_dt_to = dt_to + timedelta(days=1)
 
     nama    = kar.get("nama", "")
     jabatan = kar.get("jabatan", "")
@@ -120,7 +125,7 @@ async def get_karyawan_stats(
     if jabatan == "Kasir":
         trx_list = await db.transaksi.find({
             "kasir": nama,
-            "waktu": {"$gte": dt_from, "$lte": dt_to},
+            "waktu": {"$gte": dt_from, "$lte": query_dt_to},
         }).sort("waktu", 1).to_list(length=None)
 
         total_omzet  = sum(t.get("harga_jual", 0) for t in trx_list)
@@ -153,8 +158,8 @@ async def get_karyawan_stats(
         all_svc = await db.service.find({
             "teknisi": nama,
             "$or": [
-                {"updated_at": {"$gte": dt_from, "$lte": dt_to}},
-                {"created_at": {"$gte": dt_from, "$lte": dt_to}}
+                {"updated_at": {"$gte": dt_from, "$lte": query_dt_to}},
+                {"created_at": {"$gte": dt_from, "$lte": query_dt_to}}
             ]
         }).sort("updated_at", 1).to_list(length=None)
 

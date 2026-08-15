@@ -47,6 +47,11 @@ async def warmup_db():
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Application starting up...")
+    if settings.is_production and settings.JWT_SECRET == "dev-secret-change-in-production":
+        raise RuntimeError(
+            "JWT_SECRET is still the default dev value in a production environment — "
+            "set a real secret via the JWT_SECRET env var before starting."
+        )
     await warmup_db()
     logger.info("Application startup complete")
     yield
@@ -92,12 +97,27 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Exception-handler responses (unlike normal route responses) can end up
+    # missing CORS headers in some ASGI middleware orderings — the browser
+    # then reports the whole request as a generic network failure instead of
+    # surfacing the real status/message, which sent the frontend down the
+    # wrong troubleshooting path ("check your internet connection") for what
+    # was actually a backend 500 (see audit finding). Stamping the header
+    # here explicitly, from the same allowlist CORSMiddleware uses, is
+    # cheap insurance regardless of the exact root cause.
+    def _cors_headers(request: Request) -> dict:
+        origin = request.headers.get("origin")
+        if origin and origin in allowed_origins:
+            return {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true"}
+        return {}
+
     # HTTPException handler
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         return JSONResponse(
             status_code=exc.status_code,
             content={"success": False, "message": exc.detail, "data": None},
+            headers=_cors_headers(request),
         )
 
     # Global error handler
@@ -108,11 +128,13 @@ def create_app() -> FastAPI:
             return JSONResponse(
                 status_code=exc.status_code,
                 content={"success": False, "message": exc.detail, "data": None},
+                headers=_cors_headers(request),
             )
         logger.exception("Unhandled error: %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
             content={"success": False, "message": "Internal server error", "data": None},
+            headers=_cors_headers(request),
         )
 
     # Routes

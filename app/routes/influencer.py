@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, Header, status
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
+import re
 
 from app.config.database import get_db
 from app.schemas.influencer import (
@@ -114,22 +115,27 @@ async def list_log(
     # Build query
     query = {"cabang": cabang}
     
-    # Date filter
+    # Date filter — malformed dates used to be silently swallowed (`except
+    # ValueError: pass`), so a typo'd date_from/date_to looked identical to
+    # "no filter" in the response with zero indication anything was wrong.
+    # Match GET /influencer/videos's behavior: fail loudly with a clean 400.
     if date_from and date_to:
         try:
             df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            # date_to is a bare YYYY-MM-DD — push to the start of the next day so
+            # today's entries aren't excluded by a midnight-of-today $lte.
+            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00")) + timedelta(days=1)
             query["waktu"] = {"$gte": df, "$lte": dt}
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="Format date_from/date_to tidak valid")
     
     # Platform filter (regex match on aksi field since log doesn't have platform field yet)
     if platform:
-        query["aksi"] = {"$regex": platform, "$options": "i"}
-    
+        query["aksi"] = {"$regex": re.escape(platform), "$options": "i"}
+
     # Get logs, limit 100
     logs = await db.log.find(query).sort("waktu", -1).limit(100).to_list(None)
-    
+
     # Format response
     result = []
     for doc in logs:
@@ -137,13 +143,14 @@ async def list_log(
         aksi = doc.get("aksi", "")
         if any(x in aksi for x in ["Video", "Influencer", "TikTok", "Instagram", "Auto-Fetch", "Sync", "Upload"]):
             result.append({
+                "id": str(doc.get("_id", "")),
                 "waktu": doc.get("waktu", "").isoformat() if isinstance(doc.get("waktu"), datetime) else str(doc.get("waktu", "")),
                 "user": doc.get("user", ""),
                 "aksi": aksi,
                 "detail": doc.get("detail", ""),
                 "cabang": doc.get("cabang", ""),
             })
-    
+
     return ok(result)
 
 

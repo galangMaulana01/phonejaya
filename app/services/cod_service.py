@@ -172,7 +172,18 @@ async def create_cod_request(
         "items": items,
         "kasir_id": kasir_id,
         "kasir_name": kasir_name,
-        "kurir_id": payload.kurir_id if payload.type != "delivery" else None,
+        # Setiap pemakaian kurir_id lain di modul ini (accept/status/list,
+        # lihat app/routes/cod.py) adalah Mongo _id (`user.get("sub")`), BUKAN
+        # username — payload.kurir_id dari kasir (dipilih dari get_kurir_list,
+        # yang memang mengembalikan username) harus di-resolve ke _id user
+        # `kurir` yang sudah di-fetch di atas, supaya assignment manual untuk
+        # type=jual benar-benar cocok dengan identity yang dipakai kurir saat
+        # login. Menyimpan username langsung di sini membuat COD jual yang
+        # di-assign manual permanen tidak terjangkau oleh kurir-nya (audit
+        # multi-role menemukan ini). "beli"/"delivery" selalu broadcast
+        # (None) — payload.kurir_id yang mungkin ikut terkirim untuk tipe itu
+        # sengaja diabaikan.
+        "kurir_id": str(kurir["_id"]) if payload.type == "jual" and kurir else None,
         "kurir_name": kurir_name_val,
         "cabang": cabang,
         "status_history": status_history,
@@ -198,27 +209,34 @@ async def update_cod_status(
     new_status: str,
     actor: str,
     actor_name: str,
-    note: Optional[str] = None
+    note: Optional[str] = None,
+    foto_urls: Optional[List[str]] = None,
+    actor_cabang: str = "",
 ) -> CODRequestResponse:
     """Update status COD. Two paths:
     1. Delivery broadcast accept: atomic claim (kurir_id was None, now assigned)
     2. All other transitions: existing ownership check (kurir_id == actor)
     """
-    
+
     now = datetime.now(timezone.utc)
-    
+
     # ── PATH 1: Atomic claim for delivery broadcast ──
-    # When: delivery type, accepting (menunggu_kurir → diterima), kurir_id is null
+    # When: delivery type, accepting (menunggu_kurir → diterima), kurir_id is null.
+    # Also scoped to the kurir's own cabang — without this, any kurir account
+    # (regardless of branch) could claim another branch's broadcast pickup.
     if new_status == "diterima":
+        claim_filter = {
+            "cod_id": cod_id,
+            "status": "menunggu_kurir",
+            "$or": [
+                {"kurir_id": None},
+                {"kurir_id": {"$exists": False}}
+            ]
+        }
+        if actor_cabang:
+            claim_filter["cabang"] = actor_cabang
         result = await db.cod_requests.find_one_and_update(
-            {
-                "cod_id": cod_id,
-                "status": "menunggu_kurir",
-                "$or": [
-                    {"kurir_id": None},
-                    {"kurir_id": {"$exists": False}}
-                ]
-            },
+            claim_filter,
             {
                 "$set": {
                     "status": "diterima",
@@ -240,7 +258,7 @@ async def update_cod_status(
         )
         if result:
             await write_log(
-                db, actor, "Accept COD (broadcast)",
+                db, actor_name, "Accept COD (broadcast)",
                 f"{cod_id} → diterima oleh {actor_name}",
                 result.get("cabang", "")
             )
@@ -289,7 +307,15 @@ async def update_cod_status(
             status_code=400,
             detail="Gunakan endpoint submit-beli (wajib menyertakan deal_price dan unit_data) untuk melanjutkan COD ini."
         )
-    
+
+    # Delivery proof-of-handover: kurir must attach a photo of the unit and a
+    # photo with the customer before a delivery can be marked complete.
+    if doc["type"] == "delivery" and new_status == "terkirim" and (not foto_urls or len(foto_urls) < 2):
+        raise HTTPException(
+            status_code=400,
+            detail="Foto bukti serah terima (unit dan bersama customer) wajib diupload sebelum menandai Terkirim."
+        )
+
     # Atomic update with status filter to prevent race
     update_result = await db.cod_requests.find_one_and_update(
         {"cod_id": cod_id, "status": current},
@@ -302,7 +328,8 @@ async def update_cod_status(
                 "by": actor,
                 "by_name": actor_name,
                 "at": now,
-                "note": note
+                "note": note,
+                "foto_urls": foto_urls
             }
         }}
     )
@@ -312,7 +339,7 @@ async def update_cod_status(
     doc = await db.cod_requests.find_one({"cod_id": cod_id})
     
     await write_log(
-        db, actor, "Update COD Status",
+        db, actor_name, "Update COD Status",
         f"{cod_id} → {current} → {new_status}" + (f" ({note})" if note else ""),
         doc["cabang"]
     )
@@ -398,15 +425,22 @@ async def get_cod_detail(
     if not doc:
         raise HTTPException(status_code=404, detail="COD Request tidak ditemukan")
     
+    # Legacy/incomplete records (e.g. seed data, or ones created before a
+    # field was added) don't always have every field populated — direct dict
+    # indexing here used to crash the whole endpoint with a 500 instead of
+    # just falling back to a default, unlike the list/dashboard formatter
+    # which already uses .get() throughout (see audit finding).
+    created_at = doc.get("created_at")
+    updated_at = doc.get("updated_at")
     return CODRequestDetail(
         cod_id=doc["cod_id"],
-        type=doc["type"],
-        status=doc["status"],
-        created_at=doc["created_at"].isoformat() if isinstance(doc["created_at"], datetime) else str(doc["created_at"]),
-        updated_at=doc["updated_at"].isoformat() if isinstance(doc["updated_at"], datetime) else str(doc["updated_at"]),
-        location=doc["location"],
-        wa_number=doc["wa_number"],
-        screenshot_url=doc["screenshot_url"],
+        type=doc.get("type", ""),
+        status=doc.get("status", ""),
+        created_at=created_at.isoformat() if isinstance(created_at, datetime) else str(created_at or ""),
+        updated_at=updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at or ""),
+        location=doc.get("location", ""),
+        wa_number=doc.get("wa_number", ""),
+        screenshot_url=doc.get("screenshot_url") or "",
         note=doc.get("note"),
         product_name=doc.get("product_name"),
         offer_price=doc.get("offer_price"),
@@ -415,11 +449,12 @@ async def get_cod_detail(
         delivery_address=doc.get("delivery_address"),
         wa_customer=doc.get("wa_customer"),
         items=doc.get("items"),
-        kasir_id=doc["kasir_id"],
-        kasir_name=doc["kasir_name"],
+        kasir_id=doc.get("kasir_id", ""),
+        kasir_name=doc.get("kasir_name", ""),
         kurir_id=doc.get("kurir_id"),
         kurir_name=doc.get("kurir_name"),
         status_history=doc.get("status_history") or [],
+        cabang=doc.get("cabang") or "",
     )
 
 
@@ -491,7 +526,7 @@ async def approve_beli_cod(
         raise HTTPException(status_code=400, detail="Data unit tidak ditemukan di COD")
 
     # ══ Step 3: Create unit ══
-    from app.utils.id_generator import next_unit_id
+    from app.utils.id_generator import next_unit_id, resolve_kategori
     from app.services.unit_service import route_unit_to_inventory_or_service
 
     kat_kode = final_unit_data.get("kat_kode", "AI")
@@ -521,7 +556,7 @@ async def approve_beli_cod(
         "battery": final_unit_data.get("battery", 100),
         "battery_health": final_unit_data.get("battery_health", 0),
         "status": "Service" if kondisi_hp == "Repair" else "Tersedia",
-        "kategori": final_unit_data.get("kategori", "Android"),
+        "kategori": final_unit_data.get("kategori") or resolve_kategori(kat_kode),
         "catatan": catatan or f"COD Beli {doc['cod_id']}",
         "cabang": cabang,
         "locked": True,
@@ -772,22 +807,28 @@ async def get_kurir_monitoring(
     Get kurir monitoring stats per cabang for Owner/Kepala Cabang.
     Returns list of kurir with their COD stats.
     """
-    query = {}
+    # kurir_id: None marks a COD request that's still broadcasting, not yet
+    # claimed by anyone — grouping it in would otherwise produce a phantom
+    # "courier" card with no name in the monitoring UI (see audit finding).
+    query = {"kurir_id": {"$ne": None}}
     if cabang:
         query["cabang"] = cabang
-    
+
     # Date filter
     if date_from or date_to:
         from datetime import datetime, timezone, timedelta
-        wf = {}
-        if date_from:
-            wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
-        if date_to:
-            # Make date_to inclusive by adding 1 day
-            dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
-            wf["$lt"] = dt
-        query["created_at"] = wf
-    
+        try:
+            wf = {}
+            if date_from:
+                wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
+            if date_to:
+                # Make date_to inclusive by adding 1 day
+                dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+                wf["$lt"] = dt
+            query["created_at"] = wf
+        except ValueError:
+            pass
+
     # Aggregate by kurir
     pipeline = [
         {"$match": query},

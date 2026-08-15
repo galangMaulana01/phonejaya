@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from typing import Optional, List
+import re
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.config.database import get_db
 from app.schemas.cod import (
@@ -57,6 +58,7 @@ async def get_kurir_list(
 
 @router.get("", response_model=dict)
 async def list_cod_requests(
+    cabang: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     type: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None),
@@ -65,11 +67,16 @@ async def list_cod_requests(
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
-    """List COD requests untuk Kasir/KC/Owner (filter by cabang)."""
-    cabang = user.get("cabang")
-    
+    """List COD requests untuk Kasir/KC/Owner. Non-owner selalu dikunci ke
+    cabang sendiri; owner boleh filter bebas (termasuk kosong = semua
+    cabang) — sebelumnya endpoint ini mengunci SEMUA role (termasuk owner)
+    ke user.cabang, beda sendiri dari endpoint list serupa lainnya
+    (units/service/dashboard/transfer-stok) yang konsisten membuka akses
+    lintas cabang untuk owner."""
+    cab = cabang if user.get("role") == "owner" else user.get("cabang")
+
     cods = await cod_service.list_cod_requests_all(
-        db, cabang, status, type, date_from, date_to, limit
+        db, cab, status, type, date_from, date_to, limit
     )
     return ok([c.model_dump() for c in cods])
 
@@ -82,6 +89,8 @@ async def get_cod_detail(
 ):
     """Detail COD request."""
     cod = await cod_service.get_cod_detail(db, cod_id)
+    if user.get("role") != "owner" and cod.cabang != user.get("cabang"):
+        raise HTTPException(status_code=403, detail="Bukan hak anda untuk melihat COD ini")
     return ok(cod.model_dump())
 
 
@@ -118,7 +127,7 @@ async def kurir_accept(
     kurir_id = user.get("sub") or user.get("username")
     kurir_name = user.get("name") or user.get("username")
     
-    cod = await cod_service.update_cod_status(db, cod_id, "diterima", kurir_id, kurir_name)
+    cod = await cod_service.update_cod_status(db, cod_id, "diterima", kurir_id, kurir_name, actor_cabang=user.get("cabang", ""))
     return ok(cod.model_dump(), message=f"COD {cod_id} diterima")
 
 
@@ -167,7 +176,7 @@ async def kurir_update_status(
     kurir_id = user.get("sub") or user.get("username")
     kurir_name = user.get("name") or user.get("username")
     
-    cod = await cod_service.update_cod_status(db, cod_id, payload.status, kurir_id, kurir_name, payload.note)
+    cod = await cod_service.update_cod_status(db, cod_id, payload.status, kurir_id, kurir_name, payload.note, payload.foto_urls)
     return ok(cod.model_dump(), message=f"Status COD {cod_id} diperbarui ke {payload.status}")
 
 
@@ -264,7 +273,13 @@ async def kurir_submit_beli(
     unit_data = payload.get("unit_data")
     if not deal_price or not unit_data:
         raise HTTPException(status_code=400, detail="deal_price dan unit_data wajib diisi")
-    
+    if not isinstance(deal_price, (int, float)) or deal_price <= 0:
+        raise HTTPException(status_code=400, detail="deal_price harus lebih dari 0")
+    for imei_field in ("imei", "imei2"):
+        imei_value = unit_data.get(imei_field)
+        if imei_value and imei_value != "-" and not re.match(r"^\d{14,16}$", str(imei_value)):
+            raise HTTPException(status_code=400, detail=f"{imei_field.upper()} harus 14-16 digit angka, atau \"-\" jika tidak ada")
+
     cod = await cod_service.submit_kurir_beli(db, cod_id, kurir_id, kurir_name, deal_price, unit_data)
     return ok(cod.model_dump(), message=f"COD {cod_id} menunggu approval kasir")
 
@@ -323,21 +338,33 @@ async def kurir_log(
 ):
     """Log aktivitas Kurir."""
     kurir_id = user.get("sub") or user.get("username")
+    # write_log's "user" field stores the actor's display name everywhere in
+    # this app (see cabang_service/karyawan_service/transaksi_service) — the
+    # kurir-specific COD status/accept/reject/submit log entries follow the
+    # same convention, so this must filter by name too, not the Mongo _id.
+    kurir_name = user.get("name") or user.get("username")
     cabang = user.get("cabang")
-    
+
     if not kurir_id or not cabang:
         raise HTTPException(status_code=400, detail="Data kurir tidak lengkap")
-    
-    query = {"cabang": cabang, "user": kurir_id}
+
+    query = {"cabang": cabang, "user": kurir_name}
     if date_from or date_to:
-        wf = {}
-        if date_from:
-            wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
-        if date_to:
-            wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc)
-        query["waktu"] = wf
+        try:
+            wf = {}
+            if date_from:
+                wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
+            if date_to:
+                # date_to from the frontend is a bare YYYY-MM-DD (no time) — parsing it
+                # straight gives midnight *start* of that day, which then excludes every
+                # same-day entry from $lte. Push to the start of the next day instead,
+                # matching every other date_to comparison in this codebase.
+                wf["$lte"] = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+            query["waktu"] = wf
+        except ValueError:
+            pass
     if action:
-        query["aksi"] = {"$regex": action, "$options": "i"}
+        query["aksi"] = {"$regex": re.escape(action), "$options": "i"}
     
     cursor = db.log.find(query).sort("waktu", -1).limit(limit)
     logs = await cursor.to_list(length=limit)

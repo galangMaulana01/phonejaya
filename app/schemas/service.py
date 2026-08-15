@@ -4,11 +4,12 @@ from enum import Enum
 
 
 class StatusServiceEnum(str, Enum):
-    antrian  = "Antrian"   # baru masuk dari kasir, belum diambil teknisi
-    proses   = "Proses"    # teknisi sedang kerjakan
-    selesai  = "Selesai"   # teknisi selesai, menunggu approval harga
-    approved = "Approved"  # kasir/owner sudah set harga → unit ke stok
-    ditolak  = "Ditolak"   # unit tidak bisa diperbaiki
+    antrian             = "Antrian"             # baru masuk dari kasir, belum diambil teknisi
+    proses              = "Proses"              # teknisi sedang kerjakan
+    menunggu_sparepart  = "Menunggu_Sparepart"   # teknisi lagi nunggu sparepart yang direquest tiba
+    selesai             = "Selesai"              # teknisi selesai, menunggu approval harga
+    approved            = "Approved"             # kasir/owner sudah set harga → unit ke stok
+    ditolak             = "Ditolak"              # unit tidak bisa diperbaiki
 
 
 class ServiceCreateRequest(BaseModel):
@@ -29,6 +30,21 @@ class ServiceCreateRequest(BaseModel):
         if not v.strip():
             raise ValueError("Keluhan tidak boleh kosong")
         return v.strip()
+
+
+class ServiceUseSparepartRequest(BaseModel):
+    """Teknisi pakai sparepart yang SUDAH ADA di stok cabang untuk servis
+    ini secara langsung — beda dari request_sparepart (yang lewat approval
+    kepala_cabang -> kasir untuk part yang belum/tidak ada di stok)."""
+    sp_id:  str
+    jumlah: int = 1
+
+    @field_validator("jumlah")
+    @classmethod
+    def jumlah_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Jumlah harus lebih dari 0")
+        return v
 
 
 class ServiceUpdateRequest(BaseModel):
@@ -64,3 +80,19 @@ class ServiceResponse(BaseModel):
     foto_before_urls: List[str] = []
     foto_after_urls:  List[str] = []
     sparepart_items:  List[dict] = []
+    # Diisi sekali saat tiket pindah ke Selesai (kalau ada sparepart_items) —
+    # dasar window "Riwayat Pemakaian" (lihat sparepart.list_sparepart_riwayat).
+    sparepart_selesai_at: Optional[str] = None
+
+
+class ServiceRiwayatItem(BaseModel):
+    """Satu baris riwayat servis Selesai — No.Service/HP-IMEI/Sparepart/Harga
+    Modal/Selesai/Status. Beda dari sparepart_selesai_at yang cuma dasar
+    window transien: ini arsip permanen, tidak pernah hilang."""
+    service_id:        str
+    unit_label:        str
+    imei:              str = ""
+    sparepart_items:   List[dict] = []
+    harga_modal_total: int = 0
+    selesai_at:        Optional[str] = None
+    status:            str

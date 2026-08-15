@@ -1,15 +1,24 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 
 from app.schemas.sparepart import (
-    SparepartCreateRequest, SparepartUpdateStokRequest, SparepartResponse
+    SparepartCreateRequest, SparepartUpdateStokRequest, SparepartResponse,
+    SparepartInUseItem, DEFAULT_SPAREPART_JENIS,
 )
 from app.services.log_service import write_log
+from app.utils.formatters import fmt_waktu
+
+# Berapa lama sebuah tiket yang baru Selesai masih tampil di "Riwayat
+# Pemakaian" sebelum menghilang dari view itu (datanya sendiri tidak
+# terhapus — cuma tidak lagi ikut ke-query di sini setelah lewat jendela
+# ini). Dipakai juga oleh notifikasi teknisi (request_sparepart_service)
+# supaya jendela "baru selesai" konsisten di seluruh app.
+RIWAYAT_WINDOW_HOURS = 2
 
 
-def _fmt(doc: dict) -> SparepartResponse:
+def _fmt(doc: dict, dipakai: int = 0) -> SparepartResponse:
     p = doc.get("dimensi_p")
     l = doc.get("dimensi_l")
     t = doc.get("dimensi_t")
@@ -19,8 +28,10 @@ def _fmt(doc: dict) -> SparepartResponse:
         sp_id       = doc.get("sp_id", str(doc["_id"])),
         nama        = doc.get("nama", ""),
         kategori    = doc.get("kategori", "Umum"),
+        jenis       = doc.get("jenis") or DEFAULT_SPAREPART_JENIS,
         satuan      = doc.get("satuan", "pcs"),
         stok        = doc.get("stok", 0),
+        dipakai     = dipakai,
         harga_beli  = doc.get("harga_beli", 0),
         harga_jual  = doc.get("harga_jual", 0),
         dimensi_p   = p,
@@ -30,6 +41,26 @@ def _fmt(doc: dict) -> SparepartResponse:
         cabang      = doc.get("cabang", ""),
         dimensi_str = dim_str,
     )
+
+
+async def _dipakai_by_sp_id(db: AsyncIOMotorDatabase, cabang: Optional[str] = None) -> dict:
+    """Total sparepart_items.jumlah per sp_id, dijumlahkan lintas semua tiket
+    servis yang masih Proses/Menunggu_Sparepart — dipakai teknisi tapi belum
+    kelar. `stok` di dokumen sparepart HANYA merepresentasikan sisa yang
+    bebas (sudah dipotong atomik sejak dipakai); tanpa ini, satu-satunya cara
+    melihat berapa yang sedang dipakai adalah menjumlah manual satu-satu di
+    tab "Sedang Dipakai". Dihitung di Python (bukan aggregation pipeline)
+    supaya konsisten dengan list_sparepart_in_use dan tidak tergantung
+    dukungan $unwind/$group di mongomock (dev lokal)."""
+    query: dict = {"status": {"$in": ["Proses", "Menunggu_Sparepart"]}, "sparepart_items": {"$ne": []}}
+    if cabang:
+        query["cabang"] = cabang
+    tickets = await db.service.find(query).to_list(length=None)
+    totals: dict = {}
+    for ticket in tickets:
+        for item in ticket.get("sparepart_items") or []:
+            totals[item["sp_id"]] = totals.get(item["sp_id"], 0) + item["jumlah"]
+    return totals
 
 
 async def _next_sp_id(db: AsyncIOMotorDatabase) -> str:
@@ -46,12 +77,19 @@ async def list_sparepart(
     db: AsyncIOMotorDatabase,
     cabang: Optional[str] = None,
     kategori: Optional[str] = None,
+    jenis: Optional[str] = None,
 ) -> List[SparepartResponse]:
     query: dict = {}
     if cabang:   query["cabang"]   = cabang
     if kategori: query["kategori"] = kategori
+    if jenis:
+        # Sparepart created before the `jenis` field existed have no such
+        # key stored at all (not even the default) — treat a missing key as
+        # "repair" so old stock isn't invisible in every jenis-filtered tab.
+        query["jenis"] = jenis if jenis != DEFAULT_SPAREPART_JENIS else {"$in": [DEFAULT_SPAREPART_JENIS, None]}
     docs = await db.sparepart.find(query).sort("nama", 1).to_list(length=None)
-    return [_fmt(d) for d in docs]
+    dipakai_map = await _dipakai_by_sp_id(db, cabang)
+    return [_fmt(d, dipakai=dipakai_map.get(d.get("sp_id", ""), 0)) for d in docs]
 
 
 async def create_sparepart(
@@ -65,6 +103,7 @@ async def create_sparepart(
         "sp_id":      sp_id,
         "nama":       payload.nama,
         "kategori":   payload.kategori,
+        "jenis":      payload.jenis,
         "satuan":     payload.satuan,
         "stok":       payload.stok,
         "harga_beli": payload.harga_beli,
@@ -123,32 +162,88 @@ async def update_stok(
     return _fmt(updated)
 
 
-async def kurangi_stok_batch(
+async def list_sparepart_in_use(
     db: AsyncIOMotorDatabase,
-    items: list,   # [{"sp_id": str, "jumlah": int}]
-    actor: str,
-    cabang: str,
-) -> None:
-    """Kurangi stok beberapa sparepart sekaligus — dipanggil saat service Selesai.
-    Uses atomic find_one_and_update per item to prevent race conditions."""
-    for item in items:
-        jumlah = item["jumlah"]
-        sp_id = item["sp_id"]
+    cabang: Optional[str] = None,
+) -> List[SparepartInUseItem]:
+    """Sparepart 'Sedang Dipakai' — satu baris per sparepart_items entry di
+    setiap tiket servis yang masih Proses ATAU Menunggu_Sparepart, dilengkapi
+    info tiket/unit/teknisi. Menunggu_Sparepart perlu diikutkan juga: kalau
+    satu tiket punya >1 request sparepart dan salah satunya sudah diterima
+    (auto-reserved ke sparepart_items) sementara request lain masih belum
+    selesai, tiketnya tetap Menunggu_Sparepart sampai SEMUA request repair-nya
+    kelar — part yang sudah diterima itu tidak boleh jadi tak terlihat cuma
+    karena tiketnya belum sepenuhnya lepas dari status menunggu.
+    Tidak menyentuh koleksi sparepart sama sekali (stoknya sudah dipotong
+    langsung saat use_sparepart, bukan di sini) — ini murni tampilan agregasi."""
+    query: dict = {"status": {"$in": ["Proses", "Menunggu_Sparepart"]}, "sparepart_items": {"$ne": []}}
+    if cabang:
+        query["cabang"] = cabang
+    tickets = await db.service.find(query).to_list(length=None)
 
-        # Atomic: only deduct if stok >= jumlah AND belongs to cabang
-        result = await db.sparepart.find_one_and_update(
-            {"sp_id": sp_id, "cabang": cabang, "stok": {"$gte": jumlah}},
-            {"$inc": {"stok": -jumlah}, "$set": {"updated_at": datetime.now(timezone.utc)}},
-            return_document=True,
-        )
-        if not result:
-            # Sparepart not found OR insufficient stock — log and skip
-            sp = await db.sparepart.find_one({"sp_id": sp_id})
-            nama = sp["nama"] if sp else sp_id
-            stok_now = sp["stok"] if sp else 0
-            await write_log(db, actor, "Gagal Pemakaian Sparepart",
-                f"{sp_id} • {nama} — stok tidak cukup atau tidak ditemukan (diminta {jumlah}, tersedia {stok_now})", cabang)
+    result: List[SparepartInUseItem] = []
+    for ticket in tickets:
+        items = ticket.get("sparepart_items") or []
+        if not items:
             continue
+        unit = await db.units.find_one({"unit_id": ticket.get("unit_id", "")}) if ticket.get("unit_id") else None
+        for item in items:
+            sp = await db.sparepart.find_one({"sp_id": item["sp_id"]})
+            mulai = item.get("mulai_pakai")
+            result.append(SparepartInUseItem(
+                sp_id=item["sp_id"],
+                nama=item.get("nama", ""),
+                kategori=sp.get("kategori", "") if sp else "",
+                harga_modal=item.get("harga_modal", item.get("harga_jual", 0)),
+                jumlah=item["jumlah"],
+                service_id=ticket.get("service_id", ""),
+                unit_label=ticket.get("unit_label", ""),
+                imei=unit.get("imei", "") if unit else "",
+                teknisi=ticket.get("teknisi", ""),
+                mulai_pakai=fmt_waktu(mulai) if isinstance(mulai, datetime) else mulai,
+                cabang=ticket.get("cabang", ""),
+            ))
+    return result
 
-        await write_log(db, actor, "Pemakaian Sparepart Service",
-            f"{sp_id} • {result['nama']} -{jumlah} → stok:{result['stok']}", cabang)
+
+async def list_sparepart_riwayat(
+    db: AsyncIOMotorDatabase,
+    cabang: Optional[str] = None,
+) -> List[SparepartInUseItem]:
+    """Sparepart 'Riwayat Pemakaian' — sparepart_items dari tiket yang BARU
+    Selesai (dalam RIWAYAT_WINDOW_HOURS terakhir), dengan badge "Selesai
+    Dipakai". Ini TRANSIEN sengaja: begitu lewat jendela waktu, baris ini
+    berhenti muncul di sini walau datanya tetap utuh di dokumen service —
+    bukan arsip permanen, cuma penanda "baru saja selesai dipakai"."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=RIWAYAT_WINDOW_HOURS)
+    query: dict = {"sparepart_selesai_at": {"$gte": cutoff}, "sparepart_items": {"$ne": []}}
+    if cabang:
+        query["cabang"] = cabang
+    tickets = await db.service.find(query).to_list(length=None)
+
+    result: List[SparepartInUseItem] = []
+    for ticket in tickets:
+        items = ticket.get("sparepart_items") or []
+        if not items:
+            continue
+        unit = await db.units.find_one({"unit_id": ticket.get("unit_id", "")}) if ticket.get("unit_id") else None
+        selesai = ticket.get("sparepart_selesai_at")
+        selesai_fmt = fmt_waktu(selesai) if isinstance(selesai, datetime) else selesai
+        for item in items:
+            sp = await db.sparepart.find_one({"sp_id": item["sp_id"]})
+            mulai = item.get("mulai_pakai")
+            result.append(SparepartInUseItem(
+                sp_id=item["sp_id"],
+                nama=item.get("nama", ""),
+                kategori=sp.get("kategori", "") if sp else "",
+                harga_modal=item.get("harga_modal", item.get("harga_jual", 0)),
+                jumlah=item["jumlah"],
+                service_id=ticket.get("service_id", ""),
+                unit_label=ticket.get("unit_label", ""),
+                imei=unit.get("imei", "") if unit else "",
+                teknisi=ticket.get("teknisi", ""),
+                mulai_pakai=fmt_waktu(mulai) if isinstance(mulai, datetime) else mulai,
+                selesai_pakai=selesai_fmt,
+                cabang=ticket.get("cabang", ""),
+            ))
+    return result

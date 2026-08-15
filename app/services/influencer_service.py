@@ -1,10 +1,12 @@
 import asyncio
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 from bson import ObjectId
 from bson.errors import InvalidId
+from pymongo.errors import DuplicateKeyError
 
 from app.schemas.influencer import (
     VideoCreateRequest,
@@ -86,7 +88,10 @@ async def get_dashboard_stats(
     agg_result = await db.influencer_videos.aggregate(pipeline).to_list(length=1)
     total_views = agg_result[0]["total_views"] if agg_result else 0
     total_likes = agg_result[0]["total_likes"] if agg_result else 0
-    produk_dipromosikan = len(agg_result[0]["unit_ids"]) if agg_result else 0
+    # $addToSet counts a `None` unit_id (general-content videos with no
+    # linked product) as one distinct value, inflating this count — filter
+    # it out so only real products are counted.
+    produk_dipromosikan = len([u for u in agg_result[0]["unit_ids"] if u]) if agg_result else 0
 
     # Trend views per minggu
     trend_pipeline = [
@@ -127,7 +132,7 @@ async def get_catalog(
     if kategori:
         query["kategori"] = kategori
     if q:
-        regex = {"$regex": q, "$options": "i"}
+        regex = {"$regex": re.escape(q), "$options": "i"}
         query["$or"] = [
             {"merk": regex}, {"tipe": regex}, {"unit_id": regex},
             {"storage": regex}, {"warna": regex}
@@ -229,6 +234,17 @@ async def create_video(
                 f"{video_id} → timed out after {_METRICS_FETCH_TIMEOUT_SECONDS}s",
                 cabang
             )
+        except Exception as e:
+            # Any other network/HTTP-layer failure (DNS, connection refused,
+            # TLS, proxy errors, etc.) must degrade the same way as a known
+            # TikTokScraperError — not bubble up into a 500 that loses the
+            # whole video submission (see audit finding: httpx.ProxyError was
+            # escaping these two narrow except clauses).
+            await write_log(
+                db, actor, "TikTok Auto-Fetch Failed",
+                f"{video_id} → unexpected error: {e}",
+                cabang
+            )
     elif payload.platform.value == "instagram":
         try:
             metrics = await asyncio.wait_for(
@@ -254,6 +270,23 @@ async def create_video(
                 f"{video_id} → timed out after {_METRICS_FETCH_TIMEOUT_SECONDS}s",
                 cabang
             )
+        except Exception as e:
+            # See matching comment in the TikTok branch above.
+            await write_log(
+                db, actor, "Instagram Auto-Fetch Failed",
+                f"{video_id} → unexpected error: {e}",
+                cabang
+            )
+    elif payload.platform.value == "youtube":
+        # No scraper wired up for YouTube yet — metrics stay 0. Log this the
+        # same way as a failed TikTok/Instagram fetch instead of silently
+        # doing nothing, so it's visible in Log Aktivitas that this video's
+        # metrics were never actually fetched (see audit finding).
+        await write_log(
+            db, actor, "YouTube Auto-Fetch Failed",
+            f"{video_id} → YouTube metrics fetch not implemented",
+            cabang
+        )
     # Facebook support REMOVED - only TikTok and Instagram now
 
     doc = {
@@ -276,8 +309,19 @@ async def create_video(
         "created_at": now,
     }
 
-    result = await db.influencer_videos.insert_one(doc)
-    doc["_id"] = result.inserted_id
+    # video_id comes from an atomic per-cabang counter, but a counter that's
+    # out of sync with existing documents (e.g. records inserted directly,
+    # bypassing the counter) can still collide — retry with a fresh id a few
+    # times instead of surfacing a raw 500 for what's a recoverable clash.
+    for _ in range(3):
+        try:
+            result = await db.influencer_videos.insert_one(doc)
+            doc["_id"] = result.inserted_id
+            break
+        except DuplicateKeyError:
+            doc["video_id"] = video_id = await next_video_id(db, cabang)
+    else:
+        raise HTTPException(status_code=500, detail="Gagal membuat video ID unik, coba lagi")
 
     await write_log(
         db, actor, "Buat Video Influencer",
@@ -303,14 +347,17 @@ async def list_videos(
         query["platform"] = platform
     if date_from or date_to:
         from datetime import datetime, timezone, timedelta
-        wf = {}
-        if date_from:
-            wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
-        if date_to:
-            # Make date_to inclusive by adding 1 day
-            dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
-            wf["$lt"] = dt
-        query["uploaded_at"] = wf
+        try:
+            wf = {}
+            if date_from:
+                wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
+            if date_to:
+                # Make date_to inclusive by adding 1 day
+                dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+                wf["$lt"] = dt
+            query["uploaded_at"] = wf
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Format date_from/date_to tidak valid")
 
     docs = await db.influencer_videos.find(query).sort("uploaded_at", -1).limit(limit).to_list(length=limit)
     return [_fmt_video(d) for d in docs]
@@ -436,13 +483,17 @@ async def get_owner_dashboard(db: AsyncIOMotorDatabase) -> OwnerInfluencerDashbo
             "total_video": 1,
             "total_views": 1,
             "total_likes": 1,
-            "produk_dipromosikan": {"$size": "$unit_ids"},
+            "unit_ids": 1,
             "last_upload": {"$dateToString": {"date": "$last_upload", "format": "%Y-%m-%d %H:%M"}},
         }},
         {"$sort": {"total_views": -1}},
         {"$limit": 10}
     ]
     top_inf = await db.influencer_videos.aggregate(inf_pipeline).to_list(length=10)
+    for d in top_inf:
+        # See get_dashboard_stats — $addToSet counts a `None` unit_id
+        # (general-content video) as one distinct product, inflating this.
+        d["produk_dipromosikan"] = len([u for u in d.pop("unit_ids", []) if u])
     top_influencers = [OwnerInfluencerSummary(**d) for d in top_inf]
 
     # Recent videos (all)
@@ -479,14 +530,17 @@ async def list_all_videos_owner(
         query["platform"] = platform
     if date_from or date_to:
         from datetime import datetime, timezone, timedelta
-        wf = {}
-        if date_from:
-            wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
-        if date_to:
-            # Make date_to inclusive by adding 1 day
-            dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
-            wf["$lt"] = dt
-        query["uploaded_at"] = wf
+        try:
+            wf = {}
+            if date_from:
+                wf["$gte"] = datetime.fromisoformat(date_from.replace("Z", "")).replace(tzinfo=timezone.utc)
+            if date_to:
+                # Make date_to inclusive by adding 1 day
+                dt = datetime.fromisoformat(date_to.replace("Z", "")).replace(tzinfo=timezone.utc) + timedelta(days=1)
+                wf["$lt"] = dt
+            query["uploaded_at"] = wf
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Format date_from/date_to tidak valid")
 
     docs = await db.influencer_videos.find(query).sort("uploaded_at", -1).limit(limit).to_list(length=limit)
     return [_fmt_video(d) for d in docs]

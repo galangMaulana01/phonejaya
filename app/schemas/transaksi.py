@@ -1,5 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List
+
+from app.schemas.common import MAX_RUPIAH
 
 
 class TransaksiCreateRequest(BaseModel):
@@ -16,10 +18,26 @@ class TransaksiCreateRequest(BaseModel):
     sparepart_items: Optional[List["SparepartTrxItem"]] = None  # list sparepart yang dibeli
     foto_serah_terima: Optional[str] = None
 
+    @field_validator("biaya_garansi", "poin_dipakai")
+    @classmethod
+    def not_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Tidak boleh negatif")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Tidak boleh lebih dari {MAX_RUPIAH:,}")
+        return v
+
 
 class SparepartTrxItem(BaseModel):
     sp_id:   str
     jumlah:  int = 1
+
+    @field_validator("jumlah")
+    @classmethod
+    def jumlah_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("Jumlah harus minimal 1")
+        return v
 
 
 class TransaksiSparepartItem(BaseModel):

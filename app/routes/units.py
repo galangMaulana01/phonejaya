@@ -3,7 +3,7 @@ from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.config.database import get_db
-from app.schemas.unit import UnitCreateRequest, ApproveRepairRequest
+from app.schemas.unit import UnitCreateRequest, ApproveRepairRequest, UnitUpdateRequest
 from app.schemas.common import ok
 from app.services import unit_service
 from app.middlewares.auth import require_kasir_teknisi_or_owner, require_kepala_or_owner, require_any
@@ -72,6 +72,39 @@ async def approve_repair(
         user_role=user.get("role", ""),
     )
     return ok(unit.model_dump(), message=f"Unit {unit_id} disetujui → masuk stok Tersedia")
+
+
+@router.patch("/{unit_id}")
+async def update_unit(
+    unit_id: str,
+    body:    UnitUpdateRequest,
+    db:      AsyncIOMotorDatabase = Depends(get_db),
+    user:    dict = Depends(require_kepala_or_owner),
+):
+    """Koreksi harga_jual unit yang masih Tersedia (salah input). harga_modal tidak bisa diubah lewat sini."""
+    unit = await unit_service.update_unit(
+        db, unit_id, body,
+        actor=user.get("name", user.get("username", "")),
+        user_role=user.get("role", ""),
+        user_cabang=user.get("cabang", ""),
+    )
+    return ok(unit.model_dump(), message=f"Harga unit {unit_id} diperbarui")
+
+
+@router.delete("/{unit_id}")
+async def delete_unit(
+    unit_id: str,
+    db:      AsyncIOMotorDatabase = Depends(get_db),
+    user:    dict = Depends(require_kepala_or_owner),
+):
+    """Hapus unit yang salah input, selama masih berstatus Tersedia."""
+    await unit_service.delete_unit(
+        db, unit_id,
+        actor=user.get("name", user.get("username", "")),
+        user_role=user.get("role", ""),
+        user_cabang=user.get("cabang", ""),
+    )
+    return ok(None, message=f"Unit {unit_id} dihapus")
 
 
 @router.get("/{unit_id}/detail")

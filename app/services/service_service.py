@@ -4,35 +4,38 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 
 from app.schemas.service import (
-    ServiceUpdateRequest, ServiceResponse, StatusServiceEnum
+    ServiceUpdateRequest, ServiceResponse, StatusServiceEnum, ServiceUseSparepartRequest
 )
 from app.utils.formatters import fmt_waktu
-from app.services.sparepart import kurangi_stok_batch as sp_kurangi_stok_batch
 from app.services.log_service import write_log
 
 
 def _fmt(doc: dict) -> ServiceResponse:
-    # Pakai .get() dengan fallback di semua field
-    # agar dokumen lama yang tidak punya field tertentu tidak crash KeyError
+    # Pakai .get(field) or default di semua field — bukan .get(field, default),
+    # karena .get(field, default) hanya fallback kalau field-nya BENAR-BENAR TIDAK ADA;
+    # kalau field ada tapi nilainya None (mis. teknisi belum ditugaskan dan tersimpan
+    # sebagai null bukan ""), .get() tetap mengembalikan None dan bikin ServiceResponse
+    # (yang mewajibkan str/list, bukan Optional) gagal validasi -> 500 untuk seluruh list.
     return ServiceResponse(
         id=str(doc["_id"]),
-        service_id=doc.get("service_id", str(doc["_id"])),
-        unit_id=doc.get("unit_id", ""),
-        unit_label=doc.get("unit_label", ""),
-        nama_customer=doc.get("nama_customer", ""),
-        kontak_customer=doc.get("kontak_customer", ""),
-        keluhan=doc.get("keluhan", ""),
-        catatan_kerusakan=doc.get("catatan_kerusakan", ""),
-        status=doc.get("status", "Antrian"),
-        teknisi=doc.get("teknisi", ""),
-        foto_urls=doc.get("foto_urls", []),
-        cabang=doc.get("cabang", ""),
+        service_id=doc.get("service_id") or str(doc["_id"]),
+        unit_id=doc.get("unit_id") or "",
+        unit_label=doc.get("unit_label") or "",
+        nama_customer=doc.get("nama_customer") or "",
+        kontak_customer=doc.get("kontak_customer") or "",
+        keluhan=doc.get("keluhan") or "",
+        catatan_kerusakan=doc.get("catatan_kerusakan") or "",
+        status=doc.get("status") or "Antrian",
+        teknisi=doc.get("teknisi") or "",
+        foto_urls=doc.get("foto_urls") or [],
+        cabang=doc.get("cabang") or "",
         estimasi_selesai=doc.get("estimasi_selesai"),
         created_at=fmt_waktu(doc["created_at"]) if doc.get("created_at") else "",
         updated_at=fmt_waktu(doc["updated_at"]) if doc.get("updated_at") else None,
-        foto_before_urls=doc.get("foto_before_urls", []),
-        foto_after_urls=doc.get("foto_after_urls", []),
-        sparepart_items=doc.get("sparepart_items", []),
+        foto_before_urls=doc.get("foto_before_urls") or [],
+        foto_after_urls=doc.get("foto_after_urls") or [],
+        sparepart_items=doc.get("sparepart_items") or [],
+        sparepart_selesai_at=fmt_waktu(doc["sparepart_selesai_at"]) if doc.get("sparepart_selesai_at") else None,
     )
 
 
@@ -101,6 +104,29 @@ async def update_service(
             detail="Tiket sudah Approved dan unit sudah masuk stok. Tidak bisa diubah."
         )
 
+    # "Estimasi hanya setelah sparepart tersedia" — kalau tiket SEDANG
+    # Menunggu_Sparepart, teknisi belum pegang partnya jadi belum bisa kasih
+    # estimasi yang akurat. TAPI ini tidak berlaku kalau payload ini JUGA
+    # sekaligus memindahkan status ke Proses (override manual "lanjut tanpa
+    # sparepart ini") — di titik itu teknisi justru WAJIB kasih estimasi
+    # (lihat gate di bawah), jadi larangan ini hanya soal "isi estimasi
+    # sambil tetap diam di Menunggu_Sparepart", bukan larangan estimasi pada
+    # transisi keluar dari status itu. Dicek terhadap current_status (status
+    # SEBELUM request ini) dan HARUS di sini, sebelum mutasi apapun ke DB —
+    # kalau dicek setelah transisi status sudah di-commit (find_one_and_update
+    # di bawah), exception di titik itu tidak mem-rollback status yang sudah
+    # kepindah duluan, jadi tiketnya diam-diam lolos ke Proses tanpa estimasi
+    # walau responsnya error.
+    if (
+        payload.estimasi_selesai
+        and current_status == "Menunggu_Sparepart"
+        and payload.status != StatusServiceEnum.proses
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Belum bisa isi estimasi selagi masih menunggu sparepart tiba."
+        )
+
     updates: dict = {"updated_at": datetime.now(timezone.utc)}
 
     if payload.status is not None:
@@ -108,10 +134,11 @@ async def update_service(
 
         # Validasi transisi status yang valid
         valid_transitions = {
-            "Antrian": ["Proses", "Ditolak"],
-            "Proses":  ["Selesai", "Ditolak"],
-            "Selesai": [],          # hanya bisa Approved lewat approve_repair
-            "Ditolak": [],
+            "Antrian":            ["Proses", "Ditolak"],
+            "Proses":             ["Selesai", "Ditolak"],
+            "Menunggu_Sparepart": ["Proses", "Ditolak"],  # manual recovery — request diajukan biasanya jadi sistem yang balikin
+            "Selesai":            [],          # hanya bisa Approved lewat approve_repair
+            "Ditolak":            [],
         }
         allowed = valid_transitions.get(current_status, [])
         if new_status not in allowed:
@@ -121,8 +148,23 @@ async def update_service(
                        f"Transisi yang diizinkan: {allowed if allowed else 'tidak ada'}"
             )
 
-        if new_status == "Proses" and not payload.estimasi_selesai:
+        # Estimasi wajib diisi setiap kali tiket resmi mulai Proses — baik
+        # dari Antrian (jalur normal) MAUPUN dari Menunggu_Sparepart (override
+        # manual "lanjut tanpa sparepart ini"). Tanpa syarat yang sama di
+        # jalur override, teknisi bisa lolos ke Proses lalu ke Selesai tanpa
+        # estimasi pernah terisi sama sekali — audit multi-role menemukan ini
+        # sebagai bug nyata (tiket lolos approval pipeline tanpa estimasi).
+        if new_status == "Proses" and current_status in ("Antrian", "Menunggu_Sparepart") and not payload.estimasi_selesai:
             raise HTTPException(status_code=422, detail="Estimasi selesai wajib diisi saat mengubah status ke Proses")
+
+        # Foto AFTER masih divalidasi (lihat di bawah) — foto BEFORE sengaja
+        # tidak diwajibkan sama sekali: diagram alur klien tidak punya langkah
+        # upload foto di layar "Pilih HP", "Lanjut Proses" harus langsung ke
+        # "Pilih Kebutuhan" tanpa hambatan.
+        if new_status == "Selesai":
+            has_after_photo = bool(payload.foto_after_urls or doc.get("foto_after_urls"))
+            if not has_after_photo:
+                raise HTTPException(status_code=422, detail="Foto kondisi HP setelah dikerjakan wajib diupload sebelum menandai Selesai")
 
         # Atomic claim on the transition: only one concurrent request can move
         # this ticket out of `current_status`. The loser gets a 409 instead of
@@ -138,6 +180,30 @@ async def update_service(
             )
         updates["status"] = new_status
 
+        # Override manual Menunggu_Sparepart -> Proses ("lanjut tanpa
+        # sparepart ini"): request repair yang masih menggantung (belum
+        # Diterima/Digunakan/Ditolak) buat tiket ini TIDAK PUNYA gunanya lagi
+        # — kalau dibiarkan, KC/Kasir tetap bisa approve/beli/terima part
+        # yang tidak akan pernah dipakai (audit multi-role: request nyangkut
+        # permanen). Ditolak otomatis di sini, bukan dihapus, supaya tetap
+        # tercatat di riwayat kenapa statusnya berubah. Request yang SUDAH
+        # "Diterima" (barang fisik sudah ditahan buat tiket ini) sengaja
+        # TIDAK disentuh di sini — itu perlu intervensi kasir/KC untuk
+        # dikembalikan ke stok umum, bukan sesuatu yang aman dibatalkan
+        # otomatis begitu saja.
+        if current_status == "Menunggu_Sparepart" and new_status == "Proses":
+            await db.request_sparepart.update_many(
+                {
+                    "service_id": service_id, "jenis": "repair",
+                    "status": {"$nin": ["Diterima", "Digunakan", "Ditolak"]},
+                },
+                {"$set": {
+                    "status": "Ditolak",
+                    "catatan_kc": "Dibatalkan otomatis — teknisi melanjutkan servis tanpa sparepart ini.",
+                    "updated_at": updates["updated_at"],
+                }}
+            )
+
         # Kalau Ditolak → update unit kembali ke status khusus
         if new_status == "Ditolak":
             await db.units.update_one(
@@ -145,13 +211,31 @@ async def update_service(
                 {"$set": {"status": "Ditolak", "updated_at": datetime.now(timezone.utc)}}
             )
 
-        # Kalau Selesai → kurangi stok sparepart yang dipakai
+        # Kalau Selesai → tambahkan biaya sparepart yang dipakai ke harga_modal
+        # unit. Pakai harga_modal yang di-SNAPSHOT saat teknisi memilihnya
+        # (bukan harga_jual/retail, dan bukan harga sparepart yang berlaku
+        # SEKARANG) — supaya biaya repair akurat terhadap harga beli part,
+        # dan tidak berubah retroaktif kalau harga sparepart di-edit setelah
+        # dipakai tapi sebelum tiket ditutup. Stoknya sendiri SUDAH dipotong
+        # atomik sejak use_sparepart — tidak ada lagi pengurangan stok di sini.
         if new_status == "Selesai":
             sp_items = doc.get("sparepart_items", [])
             if sp_items:
-                await sp_kurangi_stok_batch(
-                    db, items=sp_items, actor=actor, cabang=doc.get("cabang", "")
-                )
+                # Tandai kapan pemakaian sparepart tiket ini "selesai" — dasar
+                # window Riwayat Pemakaian (tampil sementara, lalu menghilang
+                # setelah RIWAYAT_WINDOW_HOURS).
+                updates["sparepart_selesai_at"] = updates["updated_at"]
+                total_delta = sum(item.get("harga_modal", item.get("harga_jual", 0)) * item["jumlah"] for item in sp_items)
+                if total_delta:
+                    await db.units.update_one(
+                        {"unit_id": doc["unit_id"]},
+                        {"$inc": {"harga_modal": total_delta}, "$set": {"updated_at": datetime.now(timezone.utc)}}
+                    )
+                    await write_log(
+                        db, actor, "Update Modal Sparepart (Servis)",
+                        f"Unit {doc['unit_id']} modal +Rp{total_delta:,} dari {len(sp_items)} sparepart servis {service_id}",
+                        doc.get("cabang", "")
+                    )
 
     if payload.catatan_kerusakan is not None:
         updates["catatan_kerusakan"] = payload.catatan_kerusakan
@@ -182,4 +266,154 @@ async def update_service(
         f"{service_id} → {updates.get('status', 'update catatan')}",
         doc.get("cabang", "")
     )
+    return _fmt(updated)
+
+
+async def _claim_teknisi_if_unassigned(db, doc: dict, actor: str, actor_role: str) -> dict:
+    """Klaim tiket "Antrian" yang belum punya teknisi begitu teknisi pertama
+    menyentuhnya lewat use_sparepart/remove_sparepart/request sparepart —
+    perbanyakan dari auto-assign yang sudah ada di update_service, dibutuhkan
+    di sini karena sejak alur Pilih Kebutuhan, aksi-aksi itu bisa terjadi
+    SEBELUM update_service(status=Proses) pertama kali dipanggil."""
+    if doc.get("teknisi") or actor_role != "teknisi":
+        return doc
+    now = datetime.now(timezone.utc)
+    await db.service.update_one(
+        {"service_id": doc["service_id"], "teknisi": {"$in": [None, ""]}},
+        {"$set": {"teknisi": actor, "updated_at": now}}
+    )
+    doc["teknisi"] = actor
+    return doc
+
+
+async def list_service_riwayat(db, cabang: Optional[str] = None, limit: int = 200) -> List["ServiceRiwayatItem"]:
+    """Riwayat servis SUDAH SELESAI dari sudut pandang tiket — No.Service /
+    HP-IMEI / Sparepart / Harga Modal / Selesai / Status — TANPA jendela
+    waktu transien. Beda dari sparepart.list_sparepart_riwayat (sudut pandang
+    stok, hilang lagi setelah RIWAYAT_WINDOW_HOURS): ini arsip permanen milik
+    teknisi, service_id yang sudah Selesai tidak pernah hilang dari sini."""
+    from app.schemas.service import ServiceRiwayatItem
+    query: dict = {"status": "Selesai"}
+    if cabang:
+        query["cabang"] = cabang
+    docs = await db.service.find(query).sort("updated_at", -1).limit(limit).to_list(length=limit)
+    result: List[ServiceRiwayatItem] = []
+    for doc in docs:
+        unit = await db.units.find_one({"unit_id": doc.get("unit_id", "")}) if doc.get("unit_id") else None
+        items = doc.get("sparepart_items") or []
+        total = sum(item.get("harga_modal", item.get("harga_jual", 0)) * item["jumlah"] for item in items)
+        selesai = doc.get("sparepart_selesai_at") or doc.get("updated_at")
+        result.append(ServiceRiwayatItem(
+            service_id=doc.get("service_id") or "",
+            unit_label=doc.get("unit_label") or "",
+            imei=unit.get("imei", "") if unit else "",
+            sparepart_items=items,
+            harga_modal_total=total,
+            selesai_at=fmt_waktu(selesai) if isinstance(selesai, datetime) else selesai,
+            status=doc.get("status") or "",
+        ))
+    return result
+
+
+async def use_sparepart(
+    db, service_id: str, payload: ServiceUseSparepartRequest, actor: str, actor_role: str,
+) -> ServiceResponse:
+    """Teknisi ambil sparepart dari stok cabang untuk servis ini selagi servis
+    masih Proses. Stok dipotong ATOMIK DAN LANGSUNG di sini — bukan ditunda
+    sampai tiket di-set Selesai — supaya dua tiket yang rebutan sisa stok
+    yang sama saling ditolak tepat di titik pemilihan (dapat error stok
+    tidak cukup seketika), bukan salah satunya diam-diam gagal dipotong
+    belakangan sementara modal unit tetap kena tagihan (lihat audit
+    multi-role: bug overcommit sparepart).
+    """
+    doc = await db.service.find_one({"service_id": service_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
+    doc = await _claim_teknisi_if_unassigned(db, doc, actor, actor_role)
+    if actor_role != "owner" and doc.get("teknisi") != actor:
+        raise HTTPException(status_code=403, detail="Hanya teknisi yang mengerjakan servis ini yang bisa pakai sparepart")
+    # "Antrian" diizinkan juga — teknisi memilih sparepart dari stok di layar
+    # Pilih Kebutuhan, sebelum tiket resmi ditransisikan ke Proses (yang baru
+    # terjadi di layar Proses & Estimasi).
+    if doc.get("status") not in ("Antrian", "Proses"):
+        raise HTTPException(status_code=400, detail="Sparepart hanya bisa dipakai selagi servis berstatus Antrian atau Proses")
+
+    cabang = doc.get("cabang", "")
+    now = datetime.now(timezone.utc)
+
+    existing_sp = await db.sparepart.find_one({"sp_id": payload.sp_id, "cabang": cabang})
+    if not existing_sp:
+        raise HTTPException(status_code=404, detail=f"Sparepart {payload.sp_id} tidak ditemukan di cabang ini")
+    if existing_sp.get("jenis") not in (None, "repair"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{existing_sp['nama']} adalah sparepart untuk dijual, bukan untuk repair — tidak bisa dipakai di sini"
+        )
+
+    # Atomic claim: only succeeds if real stok >= jumlah right now.
+    sp = await db.sparepart.find_one_and_update(
+        {"sp_id": payload.sp_id, "cabang": cabang, "stok": {"$gte": payload.jumlah}},
+        {"$inc": {"stok": -payload.jumlah}, "$set": {"updated_at": now}},
+        return_document=True,
+    )
+    if not sp:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stok {existing_sp['nama']} tidak cukup. Tersedia: {existing_sp.get('stok', 0)}, diminta: {payload.jumlah}"
+        )
+
+    # Merge into the existing line for this sp_id (if any) instead of
+    # pushing a duplicate entry, so each sparepart appears at most once and
+    # removing it later is unambiguous. Keep the ORIGINAL mulai_pakai when
+    # merging — it reflects when this part was first picked, not the latest
+    # top-up.
+    items = doc.get("sparepart_items", [])
+    existing = next((i for i in items if i["sp_id"] == sp["sp_id"]), None)
+    if existing:
+        existing["jumlah"] += payload.jumlah
+    else:
+        items.append({
+            "sp_id": sp["sp_id"], "nama": sp["nama"], "jumlah": payload.jumlah,
+            "harga_modal": sp.get("harga_beli", 0), "mulai_pakai": now,
+        })
+    await db.service.update_one(
+        {"service_id": service_id},
+        {"$set": {"sparepart_items": items, "updated_at": now}}
+    )
+    await write_log(db, actor, "Pakai Sparepart Servis", f"{service_id} → {sp['nama']} x{payload.jumlah} (stok tersisa: {sp['stok']})", cabang)
+    updated = await db.service.find_one({"service_id": service_id})
+    return _fmt(updated)
+
+
+async def remove_sparepart(
+    db, service_id: str, sp_id: str, actor: str, actor_role: str,
+) -> ServiceResponse:
+    """Batalkan satu pemakaian sparepart yang salah pilih, sebelum tiket
+    Selesai — stok yang sudah dipotong atomik oleh use_sparepart dikembalikan
+    penuh."""
+    doc = await db.service.find_one({"service_id": service_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Service {service_id} tidak ditemukan")
+    doc = await _claim_teknisi_if_unassigned(db, doc, actor, actor_role)
+    if actor_role != "owner" and doc.get("teknisi") != actor:
+        raise HTTPException(status_code=403, detail="Hanya teknisi yang mengerjakan servis ini yang bisa mengubah pemakaian sparepart")
+    if doc.get("status") not in ("Antrian", "Proses"):
+        raise HTTPException(status_code=400, detail="Pemakaian sparepart hanya bisa diubah selagi servis berstatus Antrian atau Proses")
+
+    items = doc.get("sparepart_items", [])
+    idx = next((i for i, it in enumerate(items) if it["sp_id"] == sp_id), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail=f"{sp_id} tidak ada di daftar pemakaian tiket ini")
+    removed = items.pop(idx)
+    now = datetime.now(timezone.utc)
+    await db.sparepart.update_one(
+        {"sp_id": sp_id, "cabang": doc.get("cabang", "")},
+        {"$inc": {"stok": removed["jumlah"]}, "$set": {"updated_at": now}}
+    )
+    await db.service.update_one(
+        {"service_id": service_id},
+        {"$set": {"sparepart_items": items, "updated_at": now}}
+    )
+    await write_log(db, actor, "Batalkan Pakai Sparepart Servis", f"{service_id} → {sp_id} x{removed['jumlah']} (stok dikembalikan)", doc.get("cabang", ""))
+    updated = await db.service.find_one({"service_id": service_id})
     return _fmt(updated)

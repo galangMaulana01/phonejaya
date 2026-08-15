@@ -9,6 +9,7 @@ from app.utils.id_generator import next_trx_id
 from app.utils.formatters import fmt_waktu
 from app.services.log_service import write_log
 from app.services.customer_service import create_customer
+from app.schemas.sparepart import DEFAULT_SPAREPART_JENIS
 
 
 def _fmt(doc: dict) -> TransaksiResponse:
@@ -116,6 +117,12 @@ async def create_transaksi(
                     raise HTTPException(status_code=404, detail=f"Sparepart {item.sp_id} tidak ditemukan")
                 if sp.get("cabang") != cabang:
                     raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
+                sp_jenis = sp.get("jenis") or DEFAULT_SPAREPART_JENIS
+                if sp_jenis != "dijual":
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{sp['nama']} bukan sparepart untuk dijual (jenis: {sp_jenis}) — sparepart repair hanya bisa dipakai lewat modul Service, equipment tidak dijual per-unit"
+                    )
 
                 # Atomic check-and-decrement to prevent race condition
                 result = await db.sparepart.find_one_and_update(
@@ -147,7 +154,6 @@ async def create_transaksi(
         customer_type = payload.customer_type if payload.customer_type in ["member", "guest"] else "member"
         customer_id = None
         customer_doc = None
-        poin_dipakai = 0
         poin_baru = 0
         harga_jual_final = 0
 
@@ -173,6 +179,8 @@ async def create_transaksi(
                     customer_doc = await db.customers.find_one({"nama": payload.customer_nama.strip(), "cabang": cabang})
 
             # Points logic for member
+            if poin_dipakai < 0:
+                raise HTTPException(status_code=400, detail="poin_dipakai tidak boleh negatif")
             if customer_doc and poin_dipakai > 0:
                 customer_status = customer_doc.get("status", "Pending")
                 if customer_status != "Verified":
@@ -204,7 +212,7 @@ async def create_transaksi(
             customer_id = None
             customer_doc = None
             poin_dipakai = 0
-            poin_baru = int(harga_jual_base // 100000)
+            poin_baru = 0  # guests have no customer record to bank points into
             harga_jual_final = harga_jual_base
 
         # ── Determine tipe ──
@@ -278,6 +286,12 @@ async def create_transaksi_sparepart(
             raise HTTPException(status_code=404, detail=f"Sparepart {item.sp_id} tidak ditemukan")
         if sp.get("cabang") != cabang:
             raise HTTPException(status_code=403, detail=f"Sparepart {sp['nama']} bukan milik cabangmu")
+        sp_jenis = sp.get("jenis") or DEFAULT_SPAREPART_JENIS
+        if sp_jenis != "dijual":
+            raise HTTPException(
+                status_code=400,
+                detail=f"{sp['nama']} bukan sparepart untuk dijual (jenis: {sp_jenis})"
+            )
 
         # Atomic check-and-decrement to prevent race condition
         result = await db.sparepart.find_one_and_update(
@@ -295,7 +309,10 @@ async def create_transaksi_sparepart(
         total_modal += sp["harga_beli"]  * item.jumlah
         labels.append(f"{sp['nama']} x{item.jumlah}")
 
-    trx_id = await next_trx_id(db, cabang=cabang)
+    # Use the same global (non-cabang) counter as create_transaksi above —
+    # this endpoint used to mint a per-cabang "JYP-TRX-004" while the main
+    # one mints "TRX-005", two ID schemes for the same trx_id field.
+    trx_id = await next_trx_id(db)
     now    = datetime.now(timezone.utc)
     label  = ", ".join(labels)
     profit = total_jual - total_modal

@@ -5,6 +5,8 @@ from datetime import datetime
 import re
 from urllib.parse import urlparse
 
+from app.schemas.common import MAX_RUPIAH
+
 
 class SparepartItem(BaseModel):
     sp_id:  str
@@ -49,6 +51,7 @@ class UnitCreateRequest(BaseModel):
     storage:       str = "-"
     ram:           str = "-"
     warna:         str = "-"
+    kelengkapan:   str = "-"       # cth: "Dus, Casing" — bebas teks
     imei:          str = "-"       # IMEI 1 (wajib diisi di frontend)
     imei2:         str = "-"       # IMEI 2 opsional
     tipe_sim:      str = "Single SIM"   # Single SIM / Dual SIM / eSIM / WiFi Only
@@ -78,7 +81,33 @@ class UnitCreateRequest(BaseModel):
         if v and v != "-" and not re.match(r'^\d{14,16}$', v):
             raise ValueError("IMEI harus 14-16 digit angka")
         return v
+    @field_validator("harga_modal", "harga_jual")
+    @classmethod
+    def non_negative_price(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Harga tidak boleh negatif")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Harga tidak boleh lebih dari {MAX_RUPIAH:,}")
+        return v
 
+
+
+class UnitUpdateRequest(BaseModel):
+    """Kepala cabang/owner koreksi harga jual unit yang sudah masuk stok (misal
+    salah input). harga_modal TIDAK bisa dikoreksi lewat sini — modal hanya
+    berubah lewat jalur yang tercatat (input awal, penambahan biaya sparepart
+    servis), bukan edit manual, supaya tidak ada celah menaik/turunkan modal
+    demi memoles angka profit."""
+    harga_jual:  Optional[int] = None
+
+    @field_validator("harga_jual")
+    @classmethod
+    def non_negative(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v < 0:
+            raise ValueError("Harga tidak boleh negatif")
+        if v is not None and v > MAX_RUPIAH:
+            raise ValueError(f"Harga tidak boleh lebih dari {MAX_RUPIAH:,}")
+        return v
 
 
 class ApproveRepairRequest(BaseModel):
@@ -89,6 +118,8 @@ class ApproveRepairRequest(BaseModel):
     def positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("Harga jual harus lebih dari 0")
+        if v > MAX_RUPIAH:
+            raise ValueError(f"Harga jual tidak boleh lebih dari {MAX_RUPIAH:,}")
         return v
 
 
@@ -100,6 +131,7 @@ class UnitResponse(BaseModel):
     storage:       str
     ram:           str
     warna:         str
+    kelengkapan:   str = "-"
     imei:          str
     imei2:         str = "-"
     tipe_sim:      str = "Single SIM"

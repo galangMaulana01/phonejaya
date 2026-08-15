@@ -46,12 +46,14 @@ async def create_customer(
 @router.get("")
 async def list_customers(
     status: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
-    """List customer dengan filter status (Pending/Verified/Rejected)."""
+    """List customer dengan filter status (Pending/Verified/Rejected) dan
+    pencarian bebas by nama/kontak (dipakai autocomplete di Input Transaksi)."""
     cabang = None if user.get("role") == "owner" else user.get("cabang")
-    items = await customer_service.list_customers(db, cabang=cabang, status=status)
+    items = await customer_service.list_customers(db, cabang=cabang, status=status, q=q)
     return ok([i.model_dump() for i in items])
 
 
@@ -69,6 +71,7 @@ async def approve_customer(
         actor_id=user.get("sub", ""),
         actor_name=user.get("name", user.get("username", "")),
         actor_role=user.get("role", ""),
+        actor_cabang=user.get("cabang", ""),
     )
     return ok(item.model_dump(), message=f"Customer {item.nama} diverifikasi")
 
@@ -88,6 +91,7 @@ async def reject_customer(
         actor_id=user.get("sub", ""),
         actor_name=user.get("name", user.get("username", "")),
         actor_role=user.get("role", ""),
+        actor_cabang=user.get("cabang", ""),
     )
     return ok(item.model_dump(), message=f"Customer {item.nama} ditolak")
 

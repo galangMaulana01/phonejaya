@@ -14,11 +14,34 @@ router = APIRouter(prefix="/sparepart", tags=["Sparepart"])
 async def list_sparepart(
     cabang:   Optional[str] = Query(None),
     kategori: Optional[str] = Query(None),
+    jenis:    Optional[str] = Query(None),
     db:       AsyncIOMotorDatabase = Depends(get_db),
     user:     dict = Depends(require_kasir_teknisi_or_owner),
 ):
     cab = cabang if user.get("role") == "owner" else user.get("cabang")
-    items = await sparepart_service.list_sparepart(db, cabang=cab, kategori=kategori)
+    items = await sparepart_service.list_sparepart(db, cabang=cab, kategori=kategori, jenis=jenis)
+    return ok([i.model_dump() for i in items])
+
+
+@router.get("/sedang-dipakai")
+async def list_sparepart_in_use(
+    cabang: Optional[str] = Query(None),
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_kasir_teknisi_or_owner),
+):
+    cab = cabang if user.get("role") == "owner" else user.get("cabang")
+    items = await sparepart_service.list_sparepart_in_use(db, cabang=cab)
+    return ok([i.model_dump() for i in items])
+
+
+@router.get("/riwayat-pemakaian")
+async def list_sparepart_riwayat(
+    cabang: Optional[str] = Query(None),
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_kasir_teknisi_or_owner),
+):
+    cab = cabang if user.get("role") == "owner" else user.get("cabang")
+    items = await sparepart_service.list_sparepart_riwayat(db, cabang=cab)
     return ok([i.model_dump() for i in items])
 
 

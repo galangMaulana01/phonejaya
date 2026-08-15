@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 from typing import Optional, List
+import re
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 
 from app.schemas.unit import (
-    UnitCreateRequest, ApproveRepairRequest,
+    UnitCreateRequest, ApproveRepairRequest, UnitUpdateRequest,
     UnitResponse, KondisiHP
 )
 from app.utils.id_generator import next_unit_id, next_service_id, resolve_kategori, resolve_kondisi
@@ -83,6 +84,7 @@ def _fmt(doc: dict) -> UnitResponse:
         storage=doc["storage"],
         ram=doc.get("ram", "-"),
         warna=doc["warna"],
+        kelengkapan=doc.get("kelengkapan", "-"),
         imei=doc["imei"],
         imei2=doc.get("imei2", "-"),
         tipe_sim=doc.get("tipe_sim", "Single SIM"),
@@ -122,7 +124,7 @@ async def list_units(
     if status_filter and status_filter != "Semua":
         query["status"] = status_filter
     if q:
-        regex = {"$regex": q, "$options": "i"}
+        regex = {"$regex": re.escape(q), "$options": "i"}
         query["$or"] = [
             {"merk": regex},
             {"tipe": regex},
@@ -185,6 +187,7 @@ async def create_unit(
         "storage":       payload.storage,
         "ram":           payload.ram,
         "warna":         payload.warna,
+        "kelengkapan":   payload.kelengkapan,
         "imei":          payload.imei,
         "imei2":         payload.imei2,
         "tipe_sim":      payload.tipe_sim,
@@ -289,10 +292,18 @@ async def approve_repair(
     if service_id:
         svc = await db.service.find_one({"service_id": service_id})
         if svc and svc.get("status") not in ("Selesai", "Approved"):
-            # Rollback unit status back to Service
+            # Rollback unit status back to Service — must also undo the
+            # harga_jual/approved_by/approved_at the atomic update above
+            # already applied, otherwise a rejected approval leaves a stale
+            # price/approver stamped on a unit that's still mid-repair (see
+            # audit finding). A Repair-condition unit has harga_jual=0 until
+            # a real approval succeeds, so 0 is the correct rollback value.
             await db.units.update_one(
                 {"_id": unit["_id"], "status": "Tersedia"},
-                {"$set": {"status": "Service", "updated_at": datetime.now(timezone.utc)}}
+                {
+                    "$set": {"status": "Service", "harga_jual": 0, "updated_at": datetime.now(timezone.utc)},
+                    "$unset": {"approved_by": "", "approved_at": ""},
+                }
             )
             raise HTTPException(
                 status_code=400,
@@ -315,3 +326,44 @@ async def approve_repair(
     )
 
     return _fmt(updated)
+
+
+async def update_unit(
+    db, unit_id: str, payload: UnitUpdateRequest, actor: str, user_role: str, user_cabang: str,
+) -> UnitResponse:
+    """Kepala cabang/owner koreksi harga unit yang masih Tersedia (belum terjual)."""
+    unit = await db.units.find_one({"unit_id": unit_id})
+    if not unit:
+        raise HTTPException(status_code=404, detail=f"Unit {unit_id} tidak ditemukan")
+    if user_role != "owner" and unit.get("cabang") != user_cabang:
+        raise HTTPException(status_code=403, detail="Unit bukan milik cabang Anda")
+    if unit.get("status") != "Tersedia":
+        raise HTTPException(status_code=400, detail=f"Harga hanya bisa diubah selagi unit berstatus Tersedia (status saat ini: {unit.get('status')})")
+
+    updates = {}
+    if payload.harga_jual is not None:
+        updates["harga_jual"] = payload.harga_jual
+    if not updates:
+        raise HTTPException(status_code=422, detail="Tidak ada perubahan harga yang dikirim")
+
+    updates["updated_at"] = datetime.now(timezone.utc)
+    await db.units.update_one({"unit_id": unit_id}, {"$set": updates})
+    updated = await db.units.find_one({"unit_id": unit_id})
+
+    changes = ", ".join(f"{k}→Rp {v:,}" for k, v in updates.items() if k != "updated_at")
+    await write_log(db, actor, "Update Harga Unit", f"{unit_id} • {changes}", unit.get("cabang", ""))
+    return _fmt(updated)
+
+
+async def delete_unit(db, unit_id: str, actor: str, user_role: str, user_cabang: str) -> None:
+    """Kepala cabang/owner hapus unit yang salah input, selama belum terjual/diproses."""
+    unit = await db.units.find_one({"unit_id": unit_id})
+    if not unit:
+        raise HTTPException(status_code=404, detail=f"Unit {unit_id} tidak ditemukan")
+    if user_role != "owner" and unit.get("cabang") != user_cabang:
+        raise HTTPException(status_code=403, detail="Unit bukan milik cabang Anda")
+    if unit.get("status") != "Tersedia":
+        raise HTTPException(status_code=400, detail=f"Unit hanya bisa dihapus selagi berstatus Tersedia (status saat ini: {unit.get('status')})")
+
+    await db.units.delete_one({"unit_id": unit_id})
+    await write_log(db, actor, "Hapus Unit", f"{unit_id} • {unit.get('merk','')} {unit.get('tipe','')}", unit.get("cabang", ""))

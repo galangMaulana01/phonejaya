@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
@@ -130,12 +131,16 @@ async def list_customers(
     db: AsyncIOMotorDatabase,
     cabang: Optional[str] = None,
     status: Optional[str] = None,
+    q: Optional[str] = None,
 ) -> List[CustomerListItem]:
     query: dict = {}
     if cabang:
         query["cabang"] = cabang
     if status:
         query["status"] = status
+    if q:
+        regex = {"$regex": re.escape(q), "$options": "i"}
+        query["$or"] = [{"nama": regex}, {"kontak": regex}]
 
     docs = await db.customers.find(query).sort("created_at", -1).to_list(length=200)
     return [_fmt_list(d) for d in docs]
@@ -211,10 +216,14 @@ async def approve_customer(
     actor_id: str,
     actor_name: str,
     actor_role: str,
+    actor_cabang: str = "",
 ) -> CustomerResponse:
     doc = await db.customers.find_one({"_id": ObjectId(customer_id)})
     if not doc:
         raise HTTPException(404, "Customer tidak ditemukan")
+
+    if actor_role != "owner" and doc.get("cabang") != actor_cabang:
+        raise HTTPException(403, "Bukan hak anda untuk memverifikasi customer ini")
 
     current_status = doc.get("status", "Pending")
     await _validate_transition(current_status, "Verified", actor_role)
@@ -260,10 +269,14 @@ async def reject_customer(
     actor_id: str,
     actor_name: str,
     actor_role: str,
+    actor_cabang: str = "",
 ) -> CustomerResponse:
     doc = await db.customers.find_one({"_id": ObjectId(customer_id)})
     if not doc:
         raise HTTPException(404, "Customer tidak ditemukan")
+
+    if actor_role != "owner" and doc.get("cabang") != actor_cabang:
+        raise HTTPException(403, "Bukan hak anda untuk menolak customer ini")
 
     current_status = doc.get("status", "Pending")
     await _validate_transition(current_status, "Rejected", actor_role)
