@@ -182,7 +182,7 @@ async def kurir_update_status(
 async def kurir_input_stok(
     payload: CODKurirInputStok,
     db: AsyncIOMotorDatabase = Depends(get_db),
-    user: dict = Depends(require_kurir),
+    user: dict = Depends(get_current_user),
 ):
     """Deprecated: stok hanya dapat dibuat dari approval COD Beli."""
     raise HTTPException(
