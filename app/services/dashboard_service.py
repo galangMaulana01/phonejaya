@@ -44,6 +44,16 @@ async def get_stats(
     fin_raw = await db.transaksi.aggregate(pipeline_fin).to_list(length=1)
     fin = fin_raw[0] if fin_raw else {"total_revenue":0,"total_modal":0,"total_profit":0,"total_trx":0,"total_poin_dipakai":0,"total_poin_dapat":0}
 
+    # Keep the sold-unit metric aligned with the active dashboard period.
+    unit_sales_query = {
+        **trx_query,
+        "$or": [
+            {"tipe": {"$in": ["unit", "gabungan"]}},
+            {"tipe": {"$exists": False}, "unit_id": {"$exists": True, "$ne": None}},
+        ],
+    }
+    unit_terjual = await db.transaksi.count_documents(unit_sales_query)
+
     # Today profit (always today, not filtered by custom date)
     today = datetime.now(timezone.utc).date()
     pipeline_today = [{"$match": {**( {"cabang": cabang} if cabang else {}), "waktu": {"$gte": datetime(today.year, today.month, today.day, tzinfo=timezone.utc)}}},
@@ -65,7 +75,7 @@ async def get_stats(
 
     return {
         "unit": {"total": total_unit, "tersedia": status_map.get("Tersedia",0),
-                 "sold": status_map.get("Sold",0), "booking": status_map.get("Booking",0),
+                 "terjual": unit_terjual, "sold": status_map.get("Sold",0), "booking": status_map.get("Booking",0),
                  "service": status_map.get("Service",0)},
         "keuangan": {"total_revenue": fin["total_revenue"], "total_modal": fin["total_modal"],
                      "total_profit": fin["total_profit"], "profit_harian": profit_harian,
