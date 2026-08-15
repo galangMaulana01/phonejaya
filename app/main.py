@@ -87,6 +87,9 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
+        # GitHub/Vercel creates an immutable deployment host for this frontend.
+        # Keep previews usable without opening CORS to arbitrary Vercel projects.
+        allow_origin_regex=r"https://jayaphone-[a-z0-9-]+\.gabriels-projects-1b8f2fae\.vercel\.app",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
