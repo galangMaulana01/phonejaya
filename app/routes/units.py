@@ -24,16 +24,17 @@ async def list_units(
     status: Optional[str] = Query(None),
     q:      Optional[str] = Query(None),
     limit:  int = Query(200, ge=1, le=500),
+    skip:   int = Query(0, ge=0),
     db:     AsyncIOMotorDatabase = Depends(get_db),
     user:   dict = Depends(require_kasir_teknisi_or_owner),
 ):
     cab = _cabang_filter(user, cabang)
-    units = await unit_service.list_units(db, cabang=cab, status_filter=status, q=q, limit=limit)
+    units, total = await unit_service.list_units(db, cabang=cab, status_filter=status, q=q, limit=limit, skip=skip)
     result = [u.model_dump() for u in units]
     if user.get('role') == 'teknisi':
         for item in result:
             item.pop('harga_modal', None)
-    return ok(result)
+    return ok(result, total=total, skip=skip, limit=limit)
 
 
 @router.post("", status_code=201)

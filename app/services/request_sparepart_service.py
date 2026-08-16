@@ -72,12 +72,13 @@ async def _clear_menunggu_sparepart_if_unblocked(db, service_id: str) -> None:
     )
 
 
-async def list_requests(db, cabang=None, status=None) -> List[RequestSparepartResponse]:
+async def list_requests(db, cabang=None, status=None, limit=100, skip=0) -> tuple[List[RequestSparepartResponse], int]:
     query: dict = {}
     if cabang: query["cabang"] = cabang
     if status: query["status"] = status
-    docs = await db.request_sparepart.find(query).sort("created_at", -1).to_list(length=100)
-    return [_fmt(d) for d in docs]
+    total = await db.request_sparepart.count_documents(query)
+    docs = await db.request_sparepart.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(length=limit)
+    return [_fmt(d) for d in docs], total
 
 
 async def create_request(

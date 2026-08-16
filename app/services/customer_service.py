@@ -120,7 +120,7 @@ async def create_customer(
     doc["_id"] = result.inserted_id
 
     await write_log(
-        db, actor_id, "Tambah Customer",
+        db, actor_name, "Tambah Customer",
         f"{payload.nama} ({payload.kontak}) - Pending", cabang
     )
 
@@ -132,7 +132,9 @@ async def list_customers(
     cabang: Optional[str] = None,
     status: Optional[str] = None,
     q: Optional[str] = None,
-) -> List[CustomerListItem]:
+    limit: int = 200,
+    skip: int = 0,
+) -> tuple[List[CustomerListItem], int]:
     query: dict = {}
     if cabang:
         query["cabang"] = cabang
@@ -142,8 +144,9 @@ async def list_customers(
         regex = {"$regex": re.escape(q), "$options": "i"}
         query["$or"] = [{"nama": regex}, {"kontak": regex}]
 
-    docs = await db.customers.find(query).sort("created_at", -1).to_list(length=200)
-    return [_fmt_list(d) for d in docs]
+    total = await db.customers.count_documents(query)
+    docs = await db.customers.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(length=limit)
+    return [_fmt_list(d) for d in docs], total
 
 
 async def get_customer_detail(
@@ -255,7 +258,7 @@ async def approve_customer(
     updated = await db.customers.find_one({"_id": ObjectId(customer_id)})
 
     await write_log(
-        db, actor_id, "Approve Customer",
+        db, actor_name, "Approve Customer",
         f"{doc['nama']} diverifikasi", doc.get("cabang", "")
     )
 
@@ -309,7 +312,7 @@ async def reject_customer(
     updated = await db.customers.find_one({"_id": ObjectId(customer_id)})
 
     await write_log(
-        db, actor_id, "Reject Customer",
+        db, actor_name, "Reject Customer",
         f"{doc['nama']} ditolak: {reason}", doc.get("cabang", "")
     )
 
@@ -364,7 +367,7 @@ async def resubmit_customer(
     updated = await db.customers.find_one({"_id": ObjectId(customer_id)})
 
     await write_log(
-        db, actor_id, "Resubmit Customer",
+        db, actor_name, "Resubmit Customer",
         f"{doc['nama']} diajukan ulang", doc.get("cabang", "")
     )
 

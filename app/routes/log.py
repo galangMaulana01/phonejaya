@@ -13,6 +13,7 @@ router = APIRouter(prefix="/log", tags=["Log"])
 async def list_log(
     cabang: Optional[str] = Query(None),
     limit:     int = Query(100, ge=1, le=500),
+    skip:      int = Query(0, ge=0),
     date_from: Optional[str] = Query(None),
     date_to:   Optional[str] = Query(None),
     role_filter: Optional[str] = Query(None),
@@ -46,7 +47,8 @@ async def list_log(
             dt = datetime.fromisoformat(date_to.replace("Z","")).replace(tzinfo=timezone.utc) + timedelta(days=1)
             wf["$lt"] = dt
         query["waktu"] = wf
-    cursor = db.log.find(query).sort("waktu", -1).limit(limit)
+    total  = await db.log.count_documents(query)
+    cursor = db.log.find(query).sort("waktu", -1).skip(skip).limit(limit)
     docs   = await cursor.to_list(length=limit)
     data = [{
         "id":     str(d["_id"]),
@@ -56,4 +58,4 @@ async def list_log(
         "detail": d["detail"],
         "cabang": d.get("cabang", ""),
     } for d in docs]
-    return ok(data)
+    return ok(data, total=total, skip=skip, limit=limit)

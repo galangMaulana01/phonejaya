@@ -117,7 +117,8 @@ async def list_units(
     status_filter: Optional[str] = None,
     q: Optional[str] = None,
     limit: int = 200,
-) -> List[UnitResponse]:
+    skip: int = 0,
+) -> tuple[List[UnitResponse], int]:
     query: dict = {}
     if cabang:
         query["cabang"] = cabang
@@ -131,8 +132,9 @@ async def list_units(
             {"imei": regex},
             {"unit_id": regex},
         ]
-    docs = await db.units.find(query).sort("_id", -1).to_list(length=limit)
-    return [_fmt(d) for d in docs]
+    total = await db.units.count_documents(query)
+    docs = await db.units.find(query).sort("_id", -1).skip(skip).limit(limit).to_list(length=limit)
+    return [_fmt(d) for d in docs], total
 
 
 async def create_unit(

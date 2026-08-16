@@ -20,6 +20,17 @@ class CustomerCreateRequest(BaseModel):
     def not_empty(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Nama tidak boleh kosong")
+        if len(v.strip()) > 100:
+            raise ValueError("Maksimal 100 karakter")
+        return v.strip()
+
+    @field_validator("kontak")
+    @classmethod
+    def kontak_bounds(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Kontak tidak boleh kosong")
+        if len(v.strip()) > 100:
+            raise ValueError("Maksimal 100 karakter")
         return v.strip()
 
 

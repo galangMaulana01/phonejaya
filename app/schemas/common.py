@@ -12,8 +12,8 @@ from typing import Any, Optional
 MAX_RUPIAH = 999_999_999_999
 
 
-def ok(data: Any = None, message: str = "OK") -> dict:
-    return {"success": True, "message": message, "data": data}
+def ok(data: Any = None, message: str = "OK", **extra: Any) -> dict:
+    return {"success": True, "message": message, "data": data, **extra}
 
 
 def err(message: str) -> dict:

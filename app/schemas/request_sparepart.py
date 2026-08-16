@@ -217,3 +217,8 @@ class RequestSparepartNotifItem(BaseModel):
     jumlah:      int
     service_id:  Optional[str] = None
     unit_label:  Optional[str] = None
+    # When the sparepart actually became ready (diterima_at) — the bell needs
+    # the real event time, not "when the browser first polled and saw it",
+    # so a "3 jam lalu" notification stays accurate even if the teknisi
+    # didn't have the app open when it happened.
+    diterima_at: Optional[str] = None

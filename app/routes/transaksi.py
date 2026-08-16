@@ -14,14 +14,15 @@ router = APIRouter(prefix="/transaksi", tags=["Transaksi"])
 async def list_transaksi(
     cabang:    Optional[str] = Query(None),
     limit:     int = Query(100, ge=1, le=500),
+    skip:      int = Query(0, ge=0),
     date_from: Optional[str] = Query(None),
     date_to:   Optional[str] = Query(None),
     db:        AsyncIOMotorDatabase = Depends(get_db),
     user:      dict = Depends(require_kepala_or_owner),
 ):
     cab = cabang if user.get("role") == "owner" else user.get("cabang")
-    items = await transaksi_service.list_transaksi(db, cabang=cab, limit=limit, date_from=date_from, date_to=date_to)
-    return ok([i.model_dump() for i in items])
+    items, total = await transaksi_service.list_transaksi(db, cabang=cab, limit=limit, skip=skip, date_from=date_from, date_to=date_to)
+    return ok([i.model_dump() for i in items], total=total, skip=skip, limit=limit)
 
 
 @router.post("", status_code=201)

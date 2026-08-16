@@ -47,14 +47,16 @@ async def create_customer(
 async def list_customers(
     status: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    skip: int = Query(0, ge=0),
     db: AsyncIOMotorDatabase = Depends(get_db),
     user: dict = Depends(require_kasir_teknisi_or_owner),
 ):
     """List customer dengan filter status (Pending/Verified/Rejected) dan
     pencarian bebas by nama/kontak (dipakai autocomplete di Input Transaksi)."""
     cabang = None if user.get("role") == "owner" else user.get("cabang")
-    items = await customer_service.list_customers(db, cabang=cabang, status=status, q=q)
-    return ok([i.model_dump() for i in items])
+    items, total = await customer_service.list_customers(db, cabang=cabang, status=status, q=q, limit=limit, skip=skip)
+    return ok([i.model_dump() for i in items], total=total, skip=skip, limit=limit)
 
 
 @router.patch("/{customer_id}/approve")

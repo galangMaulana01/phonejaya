@@ -20,12 +20,14 @@ router = APIRouter(prefix="/request-sparepart", tags=["Request Sparepart"])
 @router.get("")
 async def get_requests(
     status: Optional[str] = Query(None),
+    limit:  int = Query(100, ge=1, le=500),
+    skip:   int = Query(0, ge=0),
     db:     AsyncIOMotorDatabase = Depends(get_db),
     user:   dict = Depends(require_any),
 ):
     cab = None if user.get("role") == "owner" else user.get("cabang")
-    items = await list_requests(db, cabang=cab, status=status)
-    return ok([i.model_dump() for i in items])
+    items, total = await list_requests(db, cabang=cab, status=status, limit=limit, skip=skip)
+    return ok([i.model_dump() for i in items], total=total, skip=skip, limit=limit)
 
 
 # GET /request-sparepart/notif/count - Jumlah notifikasi belum dibaca teknisi
