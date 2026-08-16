@@ -380,7 +380,7 @@ async def _terima_barang(db, doc: dict, tanggal_terima: Optional[str], actor: st
             harga_beli=harga_beli_aktual, harga_jual=0,
             cabang=cabang, catatan=f"Auto-created from request {req_id}",
             product_link=doc.get("product_link"),
-        ), actor=actor)
+        ), actor=actor, reserved_for_service_id=service_id if tied_to_ticket else None)
         sp_id = new_sp.sp_id
         await db.request_sparepart.update_one({"req_id": req_id}, {"$set": {"sp_id": sp_id}})
 

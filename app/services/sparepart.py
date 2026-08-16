@@ -79,7 +79,13 @@ async def list_sparepart(
     kategori: Optional[str] = None,
     jenis: Optional[str] = None,
 ) -> List[SparepartResponse]:
-    query: dict = {}
+    # Excludes sparepart docs reserved for one specific service ticket
+    # (auto-created by request_sparepart_service._terima_barang with stok=0
+    # when a repair request is tied to a ticket) — those were never real
+    # browsable stock, just an internal placeholder until the teknisi
+    # confirms use, so they shouldn't clutter "Tersedia". `None` matches
+    # both "field absent" (every normal sparepart) and "explicitly null".
+    query: dict = {"reserved_for_service_id": None}
     if cabang:   query["cabang"]   = cabang
     if kategori: query["kategori"] = kategori
     if jenis:
@@ -96,6 +102,11 @@ async def create_sparepart(
     db: AsyncIOMotorDatabase,
     payload: SparepartCreateRequest,
     actor: str,
+    # Set only by request_sparepart_service._terima_barang for a repair
+    # request tied to one specific ticket — marks this doc as an internal
+    # placeholder (stok=0) rather than real browsable stock, so list_sparepart
+    # excludes it from "Tersedia". Never set from the public POST /sparepart route.
+    reserved_for_service_id: Optional[str] = None,
 ) -> SparepartResponse:
     sp_id = await _next_sp_id(db)
     now   = datetime.now(timezone.utc)
@@ -116,6 +127,7 @@ async def create_sparepart(
         "created_at": now,
         "created_by": actor,
         "updated_at": None,
+        "reserved_for_service_id": reserved_for_service_id,
     }
     result = await db.sparepart.insert_one(doc)
     doc["_id"] = result.inserted_id
