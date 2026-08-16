@@ -40,6 +40,7 @@ def _fmt(doc: dict) -> RequestSparepartResponse:
         # Snapshot fields
         harga_modal_snapshot=doc.get("harga_modal_snapshot"),
         unit_nama_snapshot=doc.get("unit_nama_snapshot"),
+        unit_foto_snapshot=doc.get("unit_foto_snapshot"),
         # Legacy
         harga_jual=doc.get("harga_jual"),
         approved_by=doc.get("approved_by"),
@@ -175,6 +176,10 @@ async def create_request(
         # Snapshot fields
         "harga_modal_snapshot": unit_doc.get("harga_modal") if unit_doc else None,
         "unit_nama_snapshot": f"{unit_doc.get('merk')} {unit_doc.get('tipe')}" if unit_doc else None,
+        # Foto unit yang di-input kasir waktu Tambah Unit — dibawa serta di
+        # sini supaya kepala cabang/teknisi/kasir bisa lihat ini request buat
+        # HP yang mana tanpa harus buka tiket servisnya.
+        "unit_foto_snapshot": unit_doc.get("foto_url") if unit_doc else None,
     }
     res = await db.request_sparepart.insert_one(doc)
     doc["_id"] = res.inserted_id

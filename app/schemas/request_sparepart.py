@@ -203,6 +203,7 @@ class RequestSparepartResponse(BaseModel):
     # Snapshot fields for legacy/history consistency
     harga_modal_snapshot: Optional[int] = None
     unit_nama_snapshot:   Optional[str] = None
+    unit_foto_snapshot:   Optional[str] = None
     # Legacy fields (flow lama, dipertahankan supaya data historis tetap terbaca)
     harga_jual:       Optional[int] = None
     approved_by:      Optional[str] = None
