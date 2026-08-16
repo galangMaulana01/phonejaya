@@ -30,18 +30,22 @@ async def list_service(
 ):
     cab = _cabang_filter(user, cabang)
     items = await service_service.list_service(db, cabang=cab, status=status, date_from=date_from, date_to=date_to, limit=limit)
-    # Tabel Antrian teknisi menampilkan IMEI di kolom "HP/IMEI" — di-join di
-    # sini (bulk, satu query) daripada menambah field ke ServiceResponse,
-    # supaya schema list tetap ringan dan tidak dipakai endpoint lain.
+    # Tabel Antrian teknisi menampilkan IMEI di kolom "HP/IMEI", dan setiap
+    # tabel yang menampilkan unit butuh foto_url-nya juga (client feedback) —
+    # di-join di sini (bulk, satu query) daripada menambah field ke
+    # ServiceResponse, supaya schema list tetap ringan dan tidak dipakai
+    # endpoint lain.
     unit_ids = [i.unit_id for i in items if i.unit_id]
     units_by_id: dict = {}
     if unit_ids:
-        async for u in db.units.find({"unit_id": {"$in": unit_ids}}, {"unit_id": 1, "imei": 1}):
-            units_by_id[u["unit_id"]] = u.get("imei", "")
+        async for u in db.units.find({"unit_id": {"$in": unit_ids}}, {"unit_id": 1, "imei": 1, "foto_url": 1}):
+            units_by_id[u["unit_id"]] = {"imei": u.get("imei", ""), "foto_url": u.get("foto_url")}
     dumped = []
     for i in items:
         d = i.model_dump()
-        d["imei"] = units_by_id.get(i.unit_id, "")
+        unit_info = units_by_id.get(i.unit_id, {})
+        d["imei"] = unit_info.get("imei", "")
+        d["unit_foto_url"] = unit_info.get("foto_url")
         dumped.append(d)
     return ok(dumped)
 
@@ -68,7 +72,17 @@ async def pending_approval(
 ):
     cab = _cabang_filter(user, cabang)
     items = await service_service.list_service(db, cabang=cab, status="Selesai", limit=500)
-    return ok([i.model_dump() for i in items])
+    unit_ids = [i.unit_id for i in items if i.unit_id]
+    foto_by_id: dict = {}
+    if unit_ids:
+        async for u in db.units.find({"unit_id": {"$in": unit_ids}}, {"unit_id": 1, "foto_url": 1}):
+            foto_by_id[u["unit_id"]] = u.get("foto_url")
+    dumped = []
+    for i in items:
+        d = i.model_dump()
+        d["unit_foto_url"] = foto_by_id.get(i.unit_id)
+        dumped.append(d)
+    return ok(dumped)
 
 
 @router.get("/{service_id}")
@@ -159,6 +173,7 @@ async def service_detail(
     data["kondisi"] = unit.get("kondisi", "-") if unit else "-"
     data["kelengkapan"] = unit.get("kelengkapan", "-") if unit else "-"
     data["imei"] = unit.get("imei", "-") if unit else "-"
+    data["unit_foto_url"] = unit.get("foto_url") if unit else None
     # Add timeline from status history if available
     data["timeline"] = []
     if doc.get("created_at"):
