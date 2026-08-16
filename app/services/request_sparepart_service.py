@@ -536,6 +536,7 @@ async def list_pending_notif_for_teknisi(db, teknisi_name: str) -> List[RequestS
         RequestSparepartNotifItem(
             req_id=d["req_id"], nama_sp=d.get("nama_sp", ""), jumlah=d.get("jumlah", 1),
             service_id=d.get("service_id"), unit_label=d.get("unit_nama_snapshot"),
+            diterima_at=fmt_waktu(d["diterima_at"]) if d.get("diterima_at") else None,
         )
         for d in docs
     ]
