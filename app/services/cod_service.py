@@ -9,6 +9,7 @@ from app.schemas.cod import (
 )
 from app.utils.id_generator import next_cod_id
 from app.services.log_service import write_log
+from app.services.transaksi_service import _void_transaksi_core, amend_deal_price
 
 
 # Status flow definitions
@@ -72,13 +73,15 @@ async def create_cod_request(
     
     kurir = None
     kurir_name_val = None
-    
-    # Broadcast: beli & delivery = no kurir assigned, will be claimed by kurir.
-    # Jual only = manual assign.
-    if payload.type == "jual":
-        # Manual assign: validate kurir exists in same cabang
-        if not payload.kurir_id:
-            raise HTTPException(status_code=422, detail="kurir_id wajib untuk type jual")
+
+    # Broadcast (kurir_id=None) is the default for beli & delivery — claimed
+    # by whichever kurir accepts. Jual always requires a manual assign
+    # (validated at schema level). Delivery can ALSO be manually assigned —
+    # "nego di tempat" straight from Input Transaksi, where the item is
+    # already sold/stock already deducted but one specific kurir goes
+    # negotiate/collect at the customer's door — so it resolves kurir_id the
+    # same way jual does whenever the kasir supplied one.
+    if payload.type in ("jual", "delivery") and payload.kurir_id:
         kurir = await db.users.find_one({
             "username": payload.kurir_id,
             "role": "kurir",
@@ -88,6 +91,8 @@ async def create_cod_request(
         if not kurir:
             raise HTTPException(status_code=404, detail="Kurir tidak ditemukan atau tidak aktif di cabang Anda")
         kurir_name_val = kurir.get("name", payload.kurir_id)
+    elif payload.type == "jual" and not payload.kurir_id:
+        raise HTTPException(status_code=422, detail="kurir_id wajib untuk type jual")
     
     cod_id = await next_cod_id(db, cabang)
     now = datetime.now(timezone.utc)
@@ -180,14 +185,14 @@ async def create_cod_request(
         # lihat app/routes/cod.py) adalah Mongo _id (`user.get("sub")`), BUKAN
         # username — payload.kurir_id dari kasir (dipilih dari get_kurir_list,
         # yang memang mengembalikan username) harus di-resolve ke _id user
-        # `kurir` yang sudah di-fetch di atas, supaya assignment manual untuk
-        # type=jual benar-benar cocok dengan identity yang dipakai kurir saat
-        # login. Menyimpan username langsung di sini membuat COD jual yang
-        # di-assign manual permanen tidak terjangkau oleh kurir-nya (audit
-        # multi-role menemukan ini). "beli"/"delivery" selalu broadcast
-        # (None) — payload.kurir_id yang mungkin ikut terkirim untuk tipe itu
-        # sengaja diabaikan.
-        "kurir_id": str(kurir["_id"]) if payload.type == "jual" and kurir else None,
+        # `kurir` yang sudah di-fetch di atas, supaya assignment manual (jual,
+        # atau delivery "nego di tempat") benar-benar cocok dengan identity
+        # yang dipakai kurir saat login. Menyimpan username langsung di sini
+        # membuat COD yang di-assign manual permanen tidak terjangkau oleh
+        # kurir-nya (audit multi-role menemukan ini untuk jual). `kurir` di
+        # atas hanya pernah terisi untuk jual/delivery yang benar-benar
+        # membawa kurir_id — "beli", dan delivery broadcast biasa, tetap None.
+        "kurir_id": str(kurir["_id"]) if kurir else None,
         "kurir_name": kurir_name_val,
         "cabang": cabang,
         "status_history": status_history,
@@ -216,6 +221,7 @@ async def update_cod_status(
     note: Optional[str] = None,
     foto_urls: Optional[List[str]] = None,
     actor_cabang: str = "",
+    deal_price: Optional[int] = None,
 ) -> CODRequestResponse:
     """Update status COD. Two paths:
     1. Delivery broadcast accept: atomic claim (kurir_id was None, now assigned)
@@ -319,6 +325,31 @@ async def update_cod_status(
             status_code=400,
             detail="Foto bukti serah terima (unit dan bersama customer) wajib diupload sebelum menandai Terkirim."
         )
+
+    # A delivery reaching "gagal" means the linked transaksi never actually
+    # completed (nego di lokasi gagal, atau customer batal terima) — the
+    # unit/stok/poin that create_transaksi already committed must be given
+    # back. This applies to ANY delivery reaching gagal, not just the new
+    # "nego di tempat" ones — a plain broadcast delivery could already reach
+    # this state before, and until now had ZERO effect on the transaksi
+    # (confirmed gap). Run BEFORE the generic status $set below: if the void
+    # fails, the whole status transition aborts too, so a COD never ends up
+    # marked "gagal" while stock/points stayed silently committed.
+    if doc["type"] == "delivery" and new_status == "gagal" and doc.get("trx_id"):
+        trx_doc = await db.transaksi.find_one({"trx_id": doc["trx_id"]})
+        if trx_doc and not trx_doc.get("dibatalkan_at"):
+            await _void_transaksi_core(
+                db, trx_doc, actor_name=actor_name,
+                reason=note or f"COD {cod_id} gagal — kurir tidak berhasil menyelesaikan pengiriman",
+            )
+
+    # Nego di lokasi berhasil tapi harga akhir beda dari yang tercatat saat
+    # transaksi dibuat — kurir melaporkan harga deal lewat deal_price. Sama
+    # seperti void di atas: dijalankan sebelum status $set supaya kalau
+    # amandemen gagal, transisi "terkirim" juga gagal (bukan diam-diam
+    # kelewat, meninggalkan harga yang salah tercatat selamanya).
+    if doc["type"] == "delivery" and new_status == "terkirim" and deal_price is not None and doc.get("trx_id"):
+        await amend_deal_price(db, doc["trx_id"], deal_price, actor_name)
 
     # Atomic update with status filter to prevent race
     update_result = await db.cod_requests.find_one_and_update(

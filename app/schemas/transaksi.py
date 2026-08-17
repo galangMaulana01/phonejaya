@@ -74,6 +74,35 @@ class TransaksiResponse(BaseModel):
     customer_kontak: str = ""
     sp_items: Optional[list] = None
     foto_serah_terima: Optional[str] = None
+    # Dibatalkan — baik manual (kasir/KC/owner) atau otomatis saat COD
+    # delivery nego gagal di lokasi. Transaksi tidak punya konsep status
+    # sebelum ini (record histori flat) — field ini murni additive, None
+    # berarti masih aktif/berlaku.
+    dibatalkan_at:      Optional[str] = None
+    dibatalkan_oleh:    Optional[str] = None
+    dibatalkan_alasan:  Optional[str] = None
+    # Diamandemen — harga_jual/profit/poin_dapat diubah setelah kurir closing
+    # nego di lokasi dengan harga akhir yang berbeda dari yang tercatat saat
+    # transaksi dibuat. harga_jual_asli menyimpan angka sebelum amandemen
+    # (harga_jual di atas sudah jadi angka terbaru).
+    harga_jual_asli:    Optional[int] = None
+    diamandemen_oleh:   Optional[str] = None
+    diamandemen_at:     Optional[str] = None
+
+
+class TransaksiVoidRequest(BaseModel):
+    """Kasir/kepala cabang/owner batalkan transaksi yang sudah tercatat —
+    mengembalikan unit/stok/poin. Ditolak kalau transaksi ini sudah
+    terkirim ke customer lewat COD delivery (lihat guard di
+    transaksi_service.void_transaksi)."""
+    alasan: str
+
+    @field_validator("alasan")
+    @classmethod
+    def alasan_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Alasan pembatalan wajib diisi")
+        return v.strip()
 
 
 # Fix forward reference

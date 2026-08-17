@@ -176,7 +176,7 @@ async def kurir_update_status(
     kurir_id = user.get("sub") or user.get("username")
     kurir_name = user.get("name") or user.get("username")
     
-    cod = await cod_service.update_cod_status(db, cod_id, payload.status, kurir_id, kurir_name, payload.note, payload.foto_urls)
+    cod = await cod_service.update_cod_status(db, cod_id, payload.status, kurir_id, kurir_name, payload.note, payload.foto_urls, deal_price=payload.deal_price)
     return ok(cod.model_dump(), message=f"Status COD {cod_id} diperbarui ke {payload.status}")
 
 

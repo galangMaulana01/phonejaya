@@ -2,6 +2,7 @@ from typing import Optional, List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException
 from datetime import datetime, timezone
+from bson import ObjectId
 from app.schemas.transaksi import (
     TransaksiCreateRequest, TransaksiSparepartRequest, TransaksiResponse
 )
@@ -35,6 +36,12 @@ def _fmt(doc: dict) -> TransaksiResponse:
         customer_kontak = doc.get("customer_kontak", ""),
         sp_items      = doc.get("sp_items"),
         foto_serah_terima=doc.get("foto_serah_terima"),
+        dibatalkan_at     = fmt_waktu(doc["dibatalkan_at"]) if doc.get("dibatalkan_at") else None,
+        dibatalkan_oleh   = doc.get("dibatalkan_oleh"),
+        dibatalkan_alasan = doc.get("dibatalkan_alasan"),
+        harga_jual_asli   = doc.get("harga_jual_asli"),
+        diamandemen_oleh  = doc.get("diamandemen_oleh"),
+        diamandemen_at    = fmt_waktu(doc["diamandemen_at"]) if doc.get("diamandemen_at") else None,
     )
 
 
@@ -347,3 +354,126 @@ async def create_transaksi_sparepart(
     doc["_id"] = result.inserted_id
     await write_log(db, kasir_name, "Jual Sparepart", f"{trx_id} • {label}", cabang)
     return _fmt(doc)
+
+
+async def _void_transaksi_core(db, doc: dict, actor_name: str, reason: str) -> TransaksiResponse:
+    """Bagian bersama antara void_transaksi (manual, kasir/KC/owner lewat
+    route) dan pemicu otomatis dari cod_service saat COD delivery nego gagal
+    di lokasi — membalik semua efek create_transaksi persis sebaliknya:
+    unit balik Tersedia, sparepart balik ke stok, dan poin customer (yang
+    dipakai dikembalikan, yang didapat ditarik) dalam SATU $inc gabungan.
+    Diklaim atomik di sini (bukan di caller) supaya jalur manual dan
+    otomatis sama-sama aman dari double-void kalau kebetulan dipicu
+    berbarengan."""
+    now = datetime.now(timezone.utc)
+    trx_id = doc["trx_id"]
+
+    claimed = await db.transaksi.find_one_and_update(
+        {"trx_id": trx_id, "dibatalkan_at": None},
+        {"$set": {"dibatalkan_at": now, "dibatalkan_oleh": actor_name, "dibatalkan_alasan": reason}},
+        return_document=True,
+    )
+    if not claimed:
+        raise HTTPException(409, "Transaksi sudah dibatalkan sebelumnya")
+    doc = claimed
+
+    if doc.get("unit_id"):
+        await db.units.update_one(
+            {"unit_id": doc["unit_id"], "status": "Sold"},
+            {"$set": {"status": "Tersedia", "updated_at": now}, "$unset": {"tgl_terjual": ""}},
+        )
+    for item in (doc.get("sp_items") or []):
+        await db.sparepart.update_one(
+            {"sp_id": item["sp_id"]},
+            {"$inc": {"stok": item["jumlah"]}, "$set": {"updated_at": now}},
+        )
+    if doc.get("customer_id"):
+        poin_delta = doc.get("poin_dipakai", 0) - doc.get("poin_dapat", 0)
+        if poin_delta != 0:
+            await db.customers.update_one(
+                {"_id": ObjectId(doc["customer_id"])},
+                {"$inc": {"points": poin_delta}},
+            )
+
+    await write_log(db, actor_name, "Batalkan Transaksi", f"{trx_id} dibatalkan — {reason}", doc.get("cabang", ""))
+    updated = await db.transaksi.find_one({"trx_id": trx_id})
+    return _fmt(updated)
+
+
+async def void_transaksi(
+    db, trx_id: str, actor: str, actor_role: str, reason: str, actor_cabang: str = "",
+) -> TransaksiResponse:
+    """Kasir/kepala cabang/owner batalkan transaksi yang sudah tercatat —
+    dipakai untuk kasus di luar COD (salah input, dibatalkan customer
+    sebelum barang dikirim, dll). Ditolak kalau barangnya sudah terkirim ke
+    customer lewat COD delivery — membatalkan record di titik itu cuma bikin
+    stok "kembali" padahal barangnya sudah fisik di tangan customer; itu
+    kasus refund/retur sungguhan (item terpisah, bukan cakupan ini)."""
+    if actor_role not in ("kasir", "kepala_cabang", "owner"):
+        raise HTTPException(403, "Hanya kasir/kepala cabang/owner yang bisa membatalkan transaksi")
+    if not reason or not reason.strip():
+        raise HTTPException(422, "Alasan pembatalan wajib diisi")
+
+    doc = await db.transaksi.find_one({"trx_id": trx_id})
+    if not doc:
+        raise HTTPException(404, f"Transaksi {trx_id} tidak ditemukan")
+    if actor_role == "kepala_cabang" and doc.get("cabang") != actor_cabang:
+        raise HTTPException(403, "Transaksi bukan milik cabang Anda")
+    if actor_role == "kasir" and doc.get("kasir") != actor:
+        raise HTTPException(403, "Anda hanya bisa membatalkan transaksi milik Anda sendiri")
+
+    active_cod = await db.cod_requests.find_one({"trx_id": trx_id, "type": "delivery", "status": "terkirim"})
+    if active_cod:
+        raise HTTPException(409, f"Transaksi ini sudah terkirim ke customer lewat COD ({active_cod['cod_id']}) — tidak bisa dibatalkan dari sini")
+
+    return await _void_transaksi_core(db, doc, actor_name=actor, reason=reason.strip())
+
+
+async def amend_deal_price(db, trx_id: str, new_harga_jual: int, actor_name: str) -> TransaksiResponse:
+    """Nego di lokasi berhasil tapi harga akhir beda dari yang tercatat saat
+    transaksi dibuat — dipanggil dari cod_service saat kurir menandai COD
+    delivery 'terkirim' dengan deal_price yang berbeda. Modal tidak berubah
+    (barang yang sama), jadi selisih harga jual mengalir langsung ke profit.
+    poin_dapat dihitung ulang dari harga baru pakai formula yang sama
+    seperti create_transaksi (1 poin per Rp100.000), dan selisihnya (bisa
+    plus atau minus) di-$inc ke customer sekali saja — bukan reverse-lalu-
+    re-apply, supaya tidak ada jendela di mana poin customer sempat salah."""
+    now = datetime.now(timezone.utc)
+    doc = await db.transaksi.find_one({"trx_id": trx_id})
+    if not doc:
+        raise HTTPException(404, f"Transaksi {trx_id} tidak ditemukan")
+    if doc.get("dibatalkan_at"):
+        raise HTTPException(409, "Transaksi ini sudah dibatalkan")
+    if new_harga_jual == doc["harga_jual"]:
+        return _fmt(doc)
+
+    old_harga_jual = doc["harga_jual"]
+    new_profit = new_harga_jual - doc["harga_modal"]
+    new_poin_dapat = int(new_harga_jual // 100000) if doc.get("customer_type") == "member" else 0
+    poin_delta = new_poin_dapat - doc.get("poin_dapat", 0)
+
+    updated = await db.transaksi.find_one_and_update(
+        {"trx_id": trx_id, "dibatalkan_at": None},
+        {"$set": {
+            "harga_jual": new_harga_jual,
+            "profit": new_profit,
+            "poin_dapat": new_poin_dapat,
+            "harga_jual_asli": doc.get("harga_jual_asli", old_harga_jual),
+            "diamandemen_oleh": actor_name,
+            "diamandemen_at": now,
+            "updated_at": now,
+        }},
+        return_document=True,
+    )
+    if not updated:
+        raise HTTPException(409, "Transaksi sudah dibatalkan, tidak bisa diubah harganya")
+
+    if doc.get("customer_id") and poin_delta != 0:
+        await db.customers.update_one({"_id": ObjectId(doc["customer_id"])}, {"$inc": {"points": poin_delta}})
+
+    await write_log(
+        db, actor_name, "Amandemen Harga Transaksi",
+        f"{trx_id} • harga Rp{old_harga_jual:,} -> Rp{new_harga_jual:,} (nego di lokasi)",
+        doc.get("cabang", ""),
+    )
+    return _fmt(updated)

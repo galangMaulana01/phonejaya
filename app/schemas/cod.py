@@ -14,7 +14,11 @@ class CODRequestCreate(BaseModel):
     wa_number: str = ""
     screenshot_url: str = ""
     note: Optional[str] = None
-    kurir_id: Optional[str] = None  # Required for beli/jual, optional for delivery (broadcast)
+    # Required for jual, optional for beli/delivery. Delivery starts as
+    # broadcast (kurir_id=None) by default — kasir can also manually assign
+    # one kurir at creation for a "nego di tempat" delivery (harga_jual sudah
+    # tercatat lewat Input Transaksi, tapi kurir yang closing di lokasi).
+    kurir_id: Optional[str] = None
 
     # Type = beli fields
     product_name: Optional[str] = None
@@ -68,6 +72,21 @@ class CODStatusUpdate(BaseModel):
     # COD to "terkirim" (see update_cod_status): photo of the unit handed over
     # + photo with the customer, enforced server-side, not just in the UI.
     foto_urls: Optional[List[str]] = None
+    # Optional final price a kurir actually closed at "di tempat" — only
+    # meaningful on a type=delivery transition to "terkirim". When present
+    # and different from the linked transaksi's recorded harga_jual,
+    # update_cod_status calls transaksi_service.amend_deal_price to
+    # recompute harga_jual/profit/poin_dapat. None/absent = no change.
+    deal_price: Optional[int] = None
+
+    @field_validator("deal_price")
+    @classmethod
+    def deal_price_bounded(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v <= 0:
+            raise ValueError("Harga deal harus lebih dari 0")
+        if v is not None and v > MAX_RUPIAH:
+            raise ValueError(f"Harga deal tidak boleh lebih dari {MAX_RUPIAH:,}")
+        return v
 
 
 class CODKurirSubmitBeli(BaseModel):
