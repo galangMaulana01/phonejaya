@@ -189,24 +189,35 @@ async def create_transaksi(
                         status_code=400,
                         detail=f"Customer status {customer_status}: hanya customer Verified yang bisa klaim poin"
                     )
-                if poin_dipakai > customer_doc.get("points", 0):
-                    raise HTTPException(status_code=400, detail="Poin customer tidak cukup")
                 diskon_poin = poin_dipakai * 1000
                 harga_jual_final = harga_jual_base - diskon_poin
                 if harga_jual_final < 0:
                     raise HTTPException(status_code=400, detail="Poin terlalu banyak, harga tidak boleh negatif")
+                # Atomic conditional decrement — closes a read-then-write race
+                # where two concurrent transactions for the same customer
+                # (two kasir tabs, or a retried request) could both read the
+                # same stale balance, both pass the check above, and both
+                # deduct — overspending the balance. The balance check and
+                # the deduction now happen as ONE operation against whatever
+                # the live balance actually is at that instant.
+                claimed_customer = await db.customers.find_one_and_update(
+                    {"_id": customer_doc["_id"], "points": {"$gte": poin_dipakai}},
+                    {"$inc": {"points": -poin_dipakai}},
+                    return_document=True,
+                )
+                if not claimed_customer:
+                    raise HTTPException(status_code=400, detail="Poin customer tidak cukup")
+                customer_doc = claimed_customer
             else:
                 harga_jual_final = harga_jual_base
 
             poin_baru = int(harga_jual_final // 100000)
 
-            if customer_doc:
-                net_poin = -poin_dipakai + poin_baru
-                if net_poin != 0:
-                    await db.customers.update_one(
-                        {"_id": customer_doc["_id"]},
-                        {"$inc": {"points": net_poin}}
-                    )
+            if customer_doc and poin_baru != 0:
+                await db.customers.update_one(
+                    {"_id": customer_doc["_id"]},
+                    {"$inc": {"points": poin_baru}}
+                )
         else:
             # ── Guest flow: no customer creation, no points, no verification ──
             customer_type = "guest"
