@@ -480,9 +480,14 @@ async def confirm_use_request(
     if existing_item:
         existing_item["jumlah"] += jumlah
     else:
+        # stok_dipotong=False — unlike a direct stock pick (use_sparepart),
+        # this part's quantity was never deducted from db.sparepart.stok:
+        # it's a part bought specifically for this ticket and held aside
+        # (see _terima_barang), not pulled from the shared pool. remove_sparepart
+        # reads this flag so "Batal" doesn't credit stock that was never taken.
         items.append({
             "sp_id": sp_id, "nama": claimed.get("nama_sp", ""), "jumlah": jumlah,
-            "harga_modal": harga_modal, "mulai_pakai": now,
+            "harga_modal": harga_modal, "mulai_pakai": now, "stok_dipotong": False,
         })
     service_updates: dict = {"sparepart_items": items, "updated_at": now}
     if will_unblock:

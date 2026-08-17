@@ -372,9 +372,14 @@ async def use_sparepart(
     if existing:
         existing["jumlah"] += payload.jumlah
     else:
+        # stok_dipotong=True marks that this line item's quantity was
+        # actually deducted from db.sparepart.stok right here — remove_sparepart
+        # reads this flag to decide whether "Batal" should give stock back.
+        # confirm_use_request's items (request pipeline) never deduct stok up
+        # front, so they're tagged False — see that function for why.
         items.append({
             "sp_id": sp["sp_id"], "nama": sp["nama"], "jumlah": payload.jumlah,
-            "harga_modal": sp.get("harga_beli", 0), "mulai_pakai": now,
+            "harga_modal": sp.get("harga_beli", 0), "mulai_pakai": now, "stok_dipotong": True,
         })
     await db.service.update_one(
         {"service_id": service_id},
@@ -406,10 +411,18 @@ async def remove_sparepart(
         raise HTTPException(status_code=404, detail=f"{sp_id} tidak ada di daftar pemakaian tiket ini")
     removed = items.pop(idx)
     now = datetime.now(timezone.utc)
-    await db.sparepart.update_one(
-        {"sp_id": sp_id, "cabang": doc.get("cabang", "")},
-        {"$inc": {"stok": removed["jumlah"]}, "$set": {"updated_at": now}}
-    )
+    # Only give stock back if it was actually deducted when this line was
+    # added. Items from confirm_use_request (the request pipeline) are
+    # tagged stok_dipotong=False because that stock was never pulled from
+    # db.sparepart.stok in the first place (it's held for this ticket, not
+    # pooled) — crediting it back here would fabricate stock that was never
+    # really there. Missing flag (pre-fix legacy data) defaults to True to
+    # preserve prior behavior for direct-pick items.
+    if removed.get("stok_dipotong", True):
+        await db.sparepart.update_one(
+            {"sp_id": sp_id, "cabang": doc.get("cabang", "")},
+            {"$inc": {"stok": removed["jumlah"]}, "$set": {"updated_at": now}}
+        )
     await db.service.update_one(
         {"service_id": service_id},
         {"$set": {"sparepart_items": items, "updated_at": now}}
