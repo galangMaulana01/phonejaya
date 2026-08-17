@@ -293,21 +293,34 @@ async def _proses_terima(
     Untuk setiap unit:
     1. Generate unit_id baru dengan format cabang tujuan
     2. Update unit: unit_id baru, cabang baru
-    3. Update embedded unit_id_baru di dokumen transfer
+    3. Update embedded unit_id_baru di dokumen transfer — SEGERA per unit,
+       bukan ditunda sampai akhir batch, supaya progres tahan gagal di
+       tengah jalan (lihat catatan Pass 2 di bawah, BUG-030).
     4. Write log untuk cabang asal DAN cabang tujuan
     """
     cabang_tujuan = doc["cabang_tujuan"]
     cabang_asal   = doc["cabang_asal"]
     transfer_id   = doc["transfer_id"]
-    unit_updates  = []
 
     # Pass 1: validate every unit BEFORE mutating any of them. Previously,
     # validation and mutation happened unit-by-unit in the same loop, so a
     # later unit failing validation left earlier units already migrated to
     # the destination cabang with no rollback (see BUG-009). Validating the
     # whole batch first means a failure here mutates nothing.
+    #
+    # Units this transfer doc already recorded a unit_id_baru for (from an
+    # earlier call that migrated them fine before failing on a LATER unit —
+    # see BUG-030) are skipped here rather than re-validated: their db.units
+    # doc no longer has unit_id_asal or status "Dalam Transfer" at all (it
+    # was already renamed/moved), so re-validating them would always throw
+    # and permanently wedge every retry of this transfer, even though those
+    # units genuinely finished already.
     units_to_migrate = []
+    already_done = 0
     for unit_item in doc.get("units", []):
+        if unit_item.get("unit_id_baru"):
+            already_done += 1
+            continue
         unit_id_asal = unit_item["unit_id_asal"]
 
         unit = await db.units.find_one({"unit_id": unit_id_asal})
@@ -334,7 +347,15 @@ async def _proses_terima(
 
         units_to_migrate.append((unit_id_asal, kat_kode, kondisi_kode))
 
-    # Pass 2: all units validated — now actually migrate each one.
+    # Pass 2: all units validated — now actually migrate each one, writing
+    # each unit's unit_id_baru back onto the transfer doc IMMEDIATELY after
+    # its own migration succeeds (not batched into one write at the end of
+    # the loop). If a later unit in this same call throws (Mongo blip,
+    # id-generator failure, etc.), respond_transfer's caller reverts the
+    # transfer to "Pending" for a retry — and thanks to the per-unit write
+    # above, that retry's Pass 1 sees the earlier units as already_done and
+    # skips them, instead of failing the whole batch forever (BUG-030).
+    migrated_this_call = 0
     for unit_id_asal, kat_kode, kondisi_kode in units_to_migrate:
         unit_id_baru = await next_unit_id(db, kat_kode, kondisi_kode, cabang_tujuan)
 
@@ -348,11 +369,11 @@ async def _proses_terima(
                 "updated_at": now,
             }}
         )
-
-        unit_updates.append({
-            "unit_id_asal": unit_id_asal,
-            "unit_id_baru": unit_id_baru,
-        })
+        await db.transfer_stok.update_one(
+            {"transfer_id": transfer_id, "units.unit_id_asal": unit_id_asal},
+            {"$set": {"units.$.unit_id_baru": unit_id_baru}}
+        )
+        migrated_this_call += 1
 
         # Log per unit
         try:
@@ -366,22 +387,13 @@ async def _proses_terima(
             # Log gagal tidak boleh menghentikan proses terima
             logger.warning(f"Failed to write transfer log: {e}")
 
-    # Update embedded unit_id_baru di dokumen transfer
-    updated_units = list(doc.get("units", []))
-    id_map = {u["unit_id_asal"]: u["unit_id_baru"] for u in unit_updates}
-    for u in updated_units:
-        u["unit_id_baru"] = id_map.get(u["unit_id_asal"])
-
-    await db.transfer_stok.update_one(
-        {"transfer_id": transfer_id},
-        {"$set": {"units": updated_units}}
-    )
-
-    # Log ringkasan di cabang asal juga
+    # Log ringkasan di cabang asal juga — termasuk unit yang sudah selesai
+    # dari percobaan sebelumnya (already_done), bukan cuma yang dimigrasi
+    # di panggilan ini, supaya totalnya tetap benar setelah sebuah retry.
     await write_log(
         db, actor,
         "Transfer Stok Diterima",
-        f"{transfer_id} • {len(unit_updates)} unit keluar dari {cabang_asal} → {cabang_tujuan}",
+        f"{transfer_id} • {already_done + migrated_this_call} unit keluar dari {cabang_asal} → {cabang_tujuan}",
         cabang_asal,
     )
 
