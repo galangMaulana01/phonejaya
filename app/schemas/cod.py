@@ -15,12 +15,7 @@ class CODRequestCreate(BaseModel):
     screenshot_url: str = ""
     note: Optional[str] = None
     kurir_id: Optional[str] = None  # Required for beli/jual, optional for delivery (broadcast)
-    
-    # Location fields (for beli/jual)
-    location_address: Optional[str] = None  # Alamat lengkap: jalan, RT/RW, kelurahan, kecamatan, kota
-    location_lat: Optional[float] = None    # Latitude dari map picker
-    location_lng: Optional[float] = None    # Longitude dari map picker
-    
+
     # Type = beli fields
     product_name: Optional[str] = None
     offer_price: Optional[int] = None
