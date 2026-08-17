@@ -217,15 +217,23 @@ class RequestSparepartResponse(BaseModel):
 
 
 class RequestSparepartNotifItem(BaseModel):
-    """Ringkasan buat notifikasi teknisi: 'sparepart yang Anda minta sudah
-    diterima/direservasi'. Cuma field yang dibutuhkan bell notifikasi."""
+    """Ringkasan buat notifikasi teknisi: request sparepart yang sudah
+    diterima/direservasi ATAU ditolak KC. Cuma field yang dibutuhkan bell
+    notifikasi."""
     req_id:      str
     nama_sp:     str
     jumlah:      int
     service_id:  Optional[str] = None
     unit_label:  Optional[str] = None
+    status:      str = "Diterima"
+    # Alasan KC — hanya terisi kalau status Ditolak, supaya teknisi yang
+    # requestnya ditolak tahu alasannya tanpa harus buka tiket.
+    catatan_kc:  Optional[str] = None
     # When the sparepart actually became ready (diterima_at) — the bell needs
     # the real event time, not "when the browser first polled and saw it",
     # so a "3 jam lalu" notification stays accurate even if the teknisi
     # didn't have the app open when it happened.
     diterima_at: Optional[str] = None
+    # Real event time buat status Ditolak juga (diterima_at selalu kosong di
+    # situ) — dipakai bell sebagai pengganti diterima_at kalau itu None.
+    event_at:    Optional[str] = None

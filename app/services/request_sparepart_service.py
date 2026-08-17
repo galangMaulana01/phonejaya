@@ -600,15 +600,20 @@ async def get_request_detail(db, req_id: str) -> RequestSparepartResponse:
 
 
 def _notif_query(teknisi_name: str) -> dict:
-    """Request milik teknisi ini yang baru diterima/direservasi dalam
-    RIWAYAT_WINDOW_HOURS terakhir — dasar notifikasi bell 'sparepart Anda
-    sudah tersedia'. Jendela waktu yang sama dipakai list_sparepart_riwayat
-    supaya keduanya konsisten: begitu satu berhenti tampil, yang lain juga."""
+    """Request milik teknisi ini yang baru diterima/direservasi ATAU ditolak
+    KC dalam RIWAYAT_WINDOW_HOURS terakhir — dasar notifikasi bell. Jendela
+    waktu yang sama dipakai list_sparepart_riwayat supaya keduanya konsisten,
+    begitu satu berhenti tampil, yang lain juga. Ditolak tidak punya
+    diterima_at (part-nya tidak pernah sampai), makanya dicek lewat
+    updated_at (yang di-set respond_request/cancel_request tepat saat
+    status berubah jadi Ditolak) di cabang $or yang berbeda."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=RIWAYAT_WINDOW_HOURS)
     return {
         "dibuat_oleh": teknisi_name,
-        "status": {"$in": ["Diterima", "Digunakan"]},
-        "diterima_at": {"$gte": cutoff},
+        "$or": [
+            {"status": {"$in": ["Diterima", "Digunakan"]}, "diterima_at": {"$gte": cutoff}},
+            {"status": "Ditolak", "updated_at": {"$gte": cutoff}},
+        ],
     }
 
 
@@ -617,12 +622,15 @@ async def count_pending_notif_for_teknisi(db, teknisi_name: str) -> int:
 
 
 async def list_pending_notif_for_teknisi(db, teknisi_name: str) -> List[RequestSparepartNotifItem]:
-    docs = await db.request_sparepart.find(_notif_query(teknisi_name)).sort("diterima_at", -1).to_list(length=50)
+    docs = await db.request_sparepart.find(_notif_query(teknisi_name)).sort("updated_at", -1).to_list(length=50)
     return [
         RequestSparepartNotifItem(
             req_id=d["req_id"], nama_sp=d.get("nama_sp", ""), jumlah=d.get("jumlah", 1),
             service_id=d.get("service_id"), unit_label=d.get("unit_nama_snapshot"),
+            status=d.get("status", "Diterima"),
+            catatan_kc=d.get("catatan_kc") if d.get("status") == "Ditolak" else None,
             diterima_at=fmt_waktu(d["diterima_at"]) if d.get("diterima_at") else None,
+            event_at=fmt_waktu(d["diterima_at"]) if d.get("diterima_at") else (fmt_waktu(d["updated_at"]) if d.get("updated_at") else None),
         )
         for d in docs
     ]
