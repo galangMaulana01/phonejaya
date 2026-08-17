@@ -111,6 +111,7 @@ class CODRequestList(BaseModel):
     kurir_id: Optional[str] = None
     delivery_address: Optional[str] = None
     wa_customer: Optional[str] = None
+    trx_id: Optional[str] = None
     items: Optional[List[dict]] = None
     # Beli-specific
     unit_data: Optional[Dict[str, Any]] = None

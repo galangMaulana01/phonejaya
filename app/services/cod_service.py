@@ -151,6 +151,13 @@ async def create_cod_request(
         trx_id_val = payload.trx_id  # backward compat: bisa diisi untuk beli/jual juga
         product_name = payload.product_name
         offer_price = payload.offer_price
+        if payload.type == "jual":
+            # Jual juga punya tujuan pengiriman sendiri (bukan lewat transaksi
+            # yang sudah ada seperti delivery) — sebelumnya field ini kepotong
+            # di sini, sehingga alamat customer yang diisi kasir di cod-jual
+            # ga pernah ketulis ke doc, dan kurir cuma lihat "Toko".
+            delivery_address = payload.delivery_address or ""
+            wa_customer = payload.wa_customer or ""
     
     doc = {
         "cod_id": cod_id,
@@ -789,6 +796,7 @@ def _format_dashboard_item(doc: dict) -> CODRequestList:
         kurir_id=doc.get("kurir_id"),
         delivery_address=doc.get("delivery_address"),
         wa_customer=doc.get("wa_customer"),
+        trx_id=doc.get("trx_id"),
         items=doc.get("items"),
         # Beli-specific
         unit_data=doc.get("unit_data"),
