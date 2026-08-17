@@ -245,6 +245,40 @@ async def respond_request(
     return _fmt(updated)
 
 
+async def cancel_request(
+    db, req_id: str, actor: str, actor_role: str, catatan: str, actor_cabang: str = '',
+) -> RequestSparepartResponse:
+    """Kasir/kepala cabang/owner batalkan request yang sudah disetujui KC
+    tapi belum dibeli/diterima (Menunggu_Pembelian atau Menunggu_Barang).
+    Sebelumnya tidak ada jalur pembatalan sama sekali di titik ini — cuma
+    respond_request yang bisa reject, dan hanya selagi masih Pending. Sebuah
+    request jenis=equipment (tidak terkait tiket) yang sudah disetujui tapi
+    ternyata tidak lagi dibutuhkan sebelum ini nyangkut selamanya di
+    antrian kasir; request jenis=repair sudah punya jalur pembersihan
+    otomatis sendiri lewat _clear_menunggu_sparepart_if_unblocked saat
+    tiketnya berpindah status, tapi tetap boleh dibatalkan manual di sini
+    juga kalau perlu."""
+    if actor_role not in ("kasir", "kepala_cabang", "owner"):
+        raise HTTPException(403, "Hanya kasir/kepala cabang/owner yang bisa membatalkan request")
+    if not catatan or not catatan.strip():
+        raise HTTPException(422, "Alasan pembatalan wajib diisi")
+
+    filt = {"req_id": req_id, "status": {"$in": ["Menunggu_Pembelian", "Menunggu_Barang"]}}
+    if actor_role == "kepala_cabang":
+        filt["cabang"] = actor_cabang
+    doc = await db.request_sparepart.find_one_and_update(
+        filt,
+        {"$set": {"status": "Ditolak", "catatan_kc": catatan.strip(), "updated_at": datetime.now(timezone.utc)}},
+        return_document=True,
+    )
+    if not doc:
+        raise HTTPException(409, "Request tidak dalam status yang bisa dibatalkan (sudah diterima/ditolak, atau belum disetujui)")
+
+    await write_log(db, actor, "Batalkan Request Sparepart", f"{req_id} • {doc.get('nama_sp')} dibatalkan — {catatan.strip()}", doc.get("cabang", ""))
+    updated = await db.request_sparepart.find_one({"req_id": req_id})
+    return _fmt(updated)
+
+
 async def beli_request(
     db, req_id: str, payload: RequestSparepartBeliRequest,
     actor: str, actor_role: str = '', actor_cabang: str = ''
@@ -445,7 +479,8 @@ async def confirm_use_request(
         raise HTTPException(
             400,
             f"Tiket {service_id} sudah berstatus '{svc.get('status')}' — sparepart tidak bisa lagi "
-            f"digunakan di tiket ini. Hubungi kasir/kepala cabang untuk mengembalikan part ini ke stok umum."
+            f"digunakan di tiket ini. Kepala cabang/owner bisa melepas part ini ke stok umum dari tab "
+            f"Request Sparepart."
         )
 
     # Estimasi WAJIB dicek SEBELUM mutasi apapun kalau ini akan melepas tiket
@@ -501,6 +536,52 @@ async def confirm_use_request(
         f"{req_id} • {claimed.get('nama_sp')} x{jumlah} → tiket {service_id}"
         + (" (lanjut Proses)" if will_unblock else ""),
         claimed.get("cabang", "")
+    )
+    updated = await db.request_sparepart.find_one({"req_id": req_id})
+    return _fmt(updated)
+
+
+async def release_reservation(db, req_id: str, actor: str, actor_role: str) -> RequestSparepartResponse:
+    """Kasir/kepala cabang/owner lepas sparepart yang sudah 'Diterima' (fisik
+    ada, ditahan untuk satu tiket tertentu) balik ke stok umum cabang —
+    dipakai kalau tiketnya sudah tidak lagi butuh part ini (mis. tiket
+    keburu Selesai/Approved/Ditolak lewat jalur lain sebelum part ini
+    sempat dikonfirmasi teknisi lewat confirm_use_request). Tanpa ini part
+    yang sudah dibayar jadi stok mati permanen — lihat guard di
+    confirm_use_request yang menolak menulis ke tiket yang sudah ditutup.
+
+    Stok dinaikkan +jumlah di sini karena _terima_barang SENGAJA tidak
+    menaikkan stok untuk part yang tied_to_ticket (baik bikin doc baru
+    dengan stok=0, atau doc lama yang di-skip $inc-nya) — begitu
+    reservasinya dilepas, part itu genuinely jadi stok umum yang belum
+    pernah tercatat, jadi $inc di sini bukan mengada-adakan stok baru,
+    melainkan menuntaskan penambahan yang sengaja ditunda saat diterima.
+    """
+    if actor_role not in ("kasir", "kepala_cabang", "owner"):
+        raise HTTPException(403, "Hanya kasir/kepala cabang/owner yang bisa melepas reservasi sparepart")
+
+    doc = await db.request_sparepart.find_one_and_update(
+        {"req_id": req_id, "status": "Diterima"},
+        {"$set": {"status": "Dilepas", "updated_at": datetime.now(timezone.utc), "dilepas_oleh": actor}},
+        return_document=True,
+    )
+    if not doc:
+        raise HTTPException(409, "Request tidak dalam status Diterima, atau sudah diproses")
+
+    sp_id = doc.get("sp_id")
+    jumlah = doc.get("jumlah", 1)
+    cabang = doc.get("cabang", "")
+    if sp_id:
+        await db.sparepart.update_one(
+            {"sp_id": sp_id, "cabang": cabang},
+            {"$inc": {"stok": jumlah}, "$set": {"reserved_for_service_id": None, "updated_at": datetime.now(timezone.utc)}}
+        )
+
+    await write_log(
+        db, actor, "Lepas Reservasi Sparepart",
+        f"{req_id} • {doc.get('nama_sp')} x{jumlah} dikembalikan ke stok umum"
+        + (f" (sebelumnya ditahan untuk {doc.get('service_id')})" if doc.get("service_id") else ""),
+        cabang,
     )
     updated = await db.request_sparepart.find_one({"req_id": req_id})
     return _fmt(updated)

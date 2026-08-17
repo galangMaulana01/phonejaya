@@ -5,11 +5,13 @@ from app.config.database import get_db
 from app.schemas.request_sparepart import (
     RequestSparepartCreateRequest, RequestSparepartResponseRequest,
     RequestSparepartBeliRequest, RequestSparepartTerimaRequest, RequestSparepartGunakanRequest,
+    RequestSparepartCancelRequest,
 )
 from app.schemas.common import ok
 from app.services.request_sparepart_service import (
     list_requests, create_request, respond_request, beli_request, terima_request, get_request_detail,
-    count_pending_notif_for_teknisi, list_pending_notif_for_teknisi, confirm_use_request,
+    count_pending_notif_for_teknisi, list_pending_notif_for_teknisi, confirm_use_request, release_reservation,
+    cancel_request,
 )
 from app.middlewares.auth import require_kepala_or_owner, require_kasir, require_any, require_teknisi_or_owner
 
@@ -103,6 +105,27 @@ async def respon_request(
     return ok(item.model_dump(), message=f"Request {req_id} {item.status}")
 
 
+# PATCH /request-sparepart/{req_id}/batal - Kasir/kepala cabang/owner batalkan
+# request yang sudah disetujui tapi belum dibeli/diterima. require_any di
+# sini karena tiga role berbeda boleh memicu ini; cancel_request sendiri
+# yang menolak role di luar itu.
+@router.patch("/{req_id}/batal")
+async def batalkan_request(
+    req_id: str,
+    body:   RequestSparepartCancelRequest,
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_any),
+):
+    item = await cancel_request(
+        db, req_id,
+        actor=user.get("name", user.get("username", "")),
+        actor_role=user.get("role", ""),
+        catatan=body.catatan,
+        actor_cabang=user.get("cabang", ""),
+    )
+    return ok(item.model_dump(), message=f"Request {req_id} dibatalkan")
+
+
 # PATCH /request-sparepart/{req_id}/beli - Kasir catat pembelian
 @router.patch("/{req_id}/beli")
 async def catat_pembelian(
@@ -138,6 +161,25 @@ async def gunakan_sparepart(
         estimasi_selesai=body.estimasi_selesai,
     )
     return ok(item.model_dump(), message=f"Sparepart {item.nama_sp} digunakan di tiket {item.service_id}")
+
+
+# PATCH /request-sparepart/{req_id}/lepas - Kasir/kepala cabang/owner lepas
+# part yang sudah "Diterima" (ditahan untuk satu tiket) balik ke stok umum —
+# dipakai kalau tiket itu sudah tidak lagi bisa memakainya (lihat guard di
+# confirm_use_request). require_any di sini karena tiga role berbeda boleh
+# memicu ini; release_reservation sendiri yang menolak role di luar itu.
+@router.patch("/{req_id}/lepas")
+async def lepas_reservasi(
+    req_id: str,
+    db:     AsyncIOMotorDatabase = Depends(get_db),
+    user:   dict = Depends(require_any),
+):
+    item = await release_reservation(
+        db, req_id,
+        actor=user.get("name", user.get("username", "")),
+        actor_role=user.get("role", ""),
+    )
+    return ok(item.model_dump(), message=f"{item.nama_sp} dikembalikan ke stok umum")
 
 
 # PATCH /request-sparepart/{req_id}/terima - Kasir konfirmasi barang diterima & masuk inventory

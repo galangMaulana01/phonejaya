@@ -167,6 +167,12 @@ class RequestSparepartTerimaRequest(BaseModel):
     catatan:        str = ""
 
 
+class RequestSparepartCancelRequest(BaseModel):
+    """Kasir/kepala cabang/owner batalkan request yang sudah disetujui tapi
+    belum dibeli/diterima (Menunggu_Pembelian atau Menunggu_Barang)."""
+    catatan: str
+
+
 class RequestSparepartResponse(BaseModel):
     id:               str
     req_id:           str
