@@ -23,7 +23,11 @@ async def get_stats(
     date_to: str | None = None,
 ) -> dict:
     unit_query = {"cabang": cabang} if cabang else {}
-    trx_query = {"cabang": cabang} if cabang else {}
+    # dibatalkan_at: None excludes voided transaksi from every financial
+    # figure below — a voided sale never actually happened, so it must not
+    # count toward revenue/profit/points even though the record itself
+    # stays in the collection for audit (see void_transaksi).
+    trx_query = {"cabang": cabang, "dibatalkan_at": None} if cabang else {"dibatalkan_at": None}
 
     # Build date filter
     date_filter = _build_date_filter(date_from, date_to)
@@ -46,7 +50,7 @@ async def get_stats(
 
     # Today profit (always today, not filtered by custom date)
     today = datetime.now(timezone.utc).date()
-    pipeline_today = [{"$match": {**( {"cabang": cabang} if cabang else {}), "waktu": {"$gte": datetime(today.year, today.month, today.day, tzinfo=timezone.utc)}}},
+    pipeline_today = [{"$match": {**( {"cabang": cabang} if cabang else {}), "dibatalkan_at": None, "waktu": {"$gte": datetime(today.year, today.month, today.day, tzinfo=timezone.utc)}}},
                       {"$group": {"_id": None, "profit_hari_ini": {"$sum": "$profit"}}}]
     today_raw = await db.transaksi.aggregate(pipeline_today).to_list(length=1)
     profit_harian = today_raw[0]["profit_hari_ini"] if today_raw else 0
@@ -89,7 +93,7 @@ async def get_trend(
     Jika tidak, gunakan parameter hari (default 30 hari)."""
     from datetime import timedelta
 
-    trx_query = {"cabang": cabang} if cabang else {}
+    trx_query = {"cabang": cabang, "dibatalkan_at": None} if cabang else {"dibatalkan_at": None}
 
     # Build date filter for custom date range
     date_filter = _build_date_filter(date_from, date_to)
